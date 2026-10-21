@@ -1,0 +1,24 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="keycapBody" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#242834" />
+      <stop offset="100%" stop-color="#12141a" />
+    </linearGradient>
+    <linearGradient id="amberPlay" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <filter id="amberGlow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#e5a00d" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <!-- Full-Bleed Keycap Silhouette -->
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#keycapBody)" stroke="#e5a00d" stroke-width="6" />
+
+  <!-- Rounded Play Triangle (Y: 28..94, Height: 66, Center: 61) -->
+  <polygon points="31,31 72,61 31,91" fill="url(#amberPlay)" stroke="url(#amberPlay)" stroke-width="6" stroke-linejoin="round" filter="url(#amberGlow)" />
+
+  <!-- Rounded White Key Bar (Y: 28..94, Height: 66, Center: 61) -->
+  <rect x="88" y="28" width="12" height="66" rx="6" fill="#f8fafc" />
+</svg>

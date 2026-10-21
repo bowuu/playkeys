@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Playkeys - Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="page-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <svg viewBox="0 0 128 128" class="logo-svg">
+            <rect x="4" y="4" width="120" height="120" rx="26" fill="#1c1e26" stroke="#e5a00d" stroke-width="6" />
+            <polygon points="31,31 72,61 31,91" fill="#fbbf24" stroke="#fbbf24" stroke-width="6" stroke-linejoin="round" />
+            <rect x="88" y="28" width="12" height="66" rx="6" fill="#f8fafc" />
+          </svg>
+          <div class="brand-text">
+            <h2>Playkeys</h2>
+            <span class="version-tag">for Plex Web &bull; v1.0.10</span>
+          </div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#servers" class="nav-item active" data-tab="servers">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M4 1h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 8h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1zm0 8h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1zM6 4h2v1H6V4zm0 8h2v1H6v-1zm0 8h2v1H6v-1z"/>
+          </svg>
+          Plex Servers
+        </a>
+        <a href="#shortcuts" class="nav-item" data-tab="shortcuts">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z"/>
+          </svg>
+          Shortcuts
+        </a>
+        <a href="#about" class="nav-item" data-tab="about">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+          </svg>
+          About & Privacy
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Main Content Panels -->
+    <main class="content-area">
+      <!-- Section: Custom Plex Server URLs -->
+      <section id="section-servers" class="settings-section">
+        <header class="section-header">
+          <h1>Plex Servers</h1>
+          <p class="section-desc">Playkeys is enabled by default for official Plex Web (<span class="code-pill">app.plex.tv</span>). Add local IP addresses or custom domain servers below using runtime origin permissions.</p>
+        </header>
+
+        <!-- Add Server Card -->
+        <div class="card add-server-card">
+          <h3>Add Custom Server Origin</h3>
+          <p class="card-caption">Enter your local or remote Plex server URL (e.g., <span class="code-pill">http://192.168.1.100:32400/web</span> or <span class="code-pill">http://localhost:32400</span>).</p>
+          
+          <form id="addServerForm" class="add-server-form">
+            <div class="input-row">
+              <input type="url" id="serverUrlInput" placeholder="http://192.168.1.50:32400/web" required />
+              <button type="submit" id="btnAddServer" class="btn-primary">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                </svg>
+                Request Permission & Add
+              </button>
+            </div>
+            <div id="originNotice" class="feedback-msg hidden"></div>
+          </form>
+        </div>
+
+        <!-- Configured Servers List -->
+        <div class="card">
+          <div class="card-header-row">
+            <h3>Active Server Origins</h3>
+            <span id="serverCountBadge" class="count-pill">1 Server</span>
+          </div>
+
+          <div class="server-list">
+            <!-- Default Official Plex Web -->
+            <div class="server-item system-default">
+              <div class="server-info">
+                <div class="server-name">Plex Web Official</div>
+                <div class="server-pattern">https://app.plex.tv/*</div>
+              </div>
+              <div class="server-badges">
+                <span class="status-tag default-tag">Built-in (Scoped)</span>
+              </div>
+            </div>
+
+            <!-- Dynamic Custom Servers List -->
+            <div id="customServerList" class="custom-servers"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Global Shortcuts -->
+      <section id="section-shortcuts" class="settings-section hidden">
+        <header class="section-header">
+          <h1>Keyboard Shortcuts</h1>
+          <p class="section-desc">Global media keys allow you to control playback even when Chrome is minimized or in the background.</p>
+        </header>
+
+        <div class="card">
+          <table class="shortcuts-table">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Shortcut</th>
+                <th>Scope</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="action-cell">Play / Pause</td>
+                <td><kbd>MediaPlayPause</kbd></td>
+                <td><span class="scope-pill global">Global</span></td>
+                <td>Toggle playback in active Plex tab</td>
+              </tr>
+              <tr>
+                <td class="action-cell">Next Track</td>
+                <td><kbd>MediaNextTrack</kbd></td>
+                <td><span class="scope-pill global">Global</span></td>
+                <td>Skip to next item or chapter</td>
+              </tr>
+              <tr>
+                <td class="action-cell">Previous Track</td>
+                <td><kbd>MediaPrevTrack</kbd></td>
+                <td><span class="scope-pill global">Global</span></td>
+                <td>Previous item or rewind to start</td>
+              </tr>
+              <tr>
+                <td class="action-cell">Stop Playback</td>
+                <td><kbd>MediaStop</kbd></td>
+                <td><span class="scope-pill global">Global</span></td>
+                <td>Stop playback and clear toolbar badge</td>
+              </tr>
+              <tr>
+                <td class="action-cell">Volume Up</td>
+                <td><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>↑</kbd></td>
+                <td><span class="scope-pill in-chrome">Chrome</span></td>
+                <td>Increase volume by 5%</td>
+              </tr>
+              <tr>
+                <td class="action-cell">Volume Down</td>
+                <td><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>↓</kbd></td>
+                <td><span class="scope-pill in-chrome">Chrome</span></td>
+                <td>Decrease volume by 5%</td>
+              </tr>
+              <tr>
+                <td class="action-cell">Toggle Mute</td>
+                <td><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd></td>
+                <td><span class="scope-pill in-chrome">Chrome</span></td>
+                <td>Mute / Unmute audio output</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="table-footer">
+            <p>Want to rebind these shortcuts or assign custom keys?</p>
+            <button id="btnOpenChromeShortcuts" class="btn-secondary">
+              Open Chrome Shortcuts Settings
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: About & Privacy -->
+      <section id="section-about" class="settings-section hidden">
+        <header class="section-header">
+          <h1>About Playkeys</h1>
+          <p class="section-desc">Independent, clean-room Manifest V3 extension built for privacy, performance, and seamless media control.</p>
+        </header>
+
+        <div class="card">
+          <h3>Principle of Least Privilege</h3>
+          <p class="about-p">Playkeys only requests access to <span class="code-pill">https://app.plex.tv/*</span> by default. Custom local and remote server origins are only requested on-demand when explicitly configured by you.</p>
+
+          <h3 class="mt-4">Zero-Data Collection & Privacy</h3>
+          <p class="about-p">Playkeys does not collect, record, track, transmit, or monetize any personal information, media history, or browsing activity. All state synchronizations operate strictly locally between your active browser tabs and the background worker.</p>
+
+          <h3 class="mt-4">Toolbar Squircle Badge</h3>
+          <p class="about-p">The badge dynamically indicates playback state (<span class="code-pill">▶</span> for playing, <span class="code-pill">⏸</span> for paused) and completely clears whenever playback finishes, stops, or your Plex tab closes.</p>
+
+          <div class="trademark-notice mt-4">
+            <strong>Trademark Disclaimer:</strong> Plex is a registered trademark of Plex, Inc. Playkeys is an independently developed open-source browser extension and is not affiliated with, endorsed by, or sponsored by Plex, Inc.
+          </div>
+
+          <div class="license-info mt-4">
+            <strong>License:</strong> MIT License &bull; Free and Open Source.
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
