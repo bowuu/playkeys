@@ -131,3 +131,17 @@ Playkeys is built on the **Principle of Least Privilege**:
 ## 📄 License
 
 This project is licensed under the permissive **[MIT License](LICENSE)**.
+
+
+---
+
+## 🤖 AI Agent & Developer Guidelines
+
+Operational rulebooks, architectural patterns, DirectWrite badge kerning specifications, and Chrome Web Store guidelines for AI pair programmers (e.g. Antigravity) are maintained in the private vault:
+👉 **[`bowuu/agent-rules`](https://github.com/bowuu/agent-rules)** (`repos/playkeys/AGENTS.md`)
+
+To sync local guidelines across devices, clone the private vault alongside this project and run:
+```powershell
+cd agent-rules
+.\sync.ps1 -Action deploy
+```

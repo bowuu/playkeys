@@ -1,0 +1,20 @@
+# Local & Internal Developer Guides
+*.local.md
+INTERNAL_DEV_GUIDE.local.md
+
+# Packaging & Release Archives
+*.zip
+dist/
+build/
+scratch/
+.scratch/
+
+# OS & Editor Metadata
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+*.tmp
+
+# Private Local Agent Rules
+AGENTS.md
