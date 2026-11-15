@@ -2,7 +2,7 @@
 
 **Last Updated:** October 16, 2026
 
-Playkeys for Plex Web ("the Extension") is an open-source, clean-room Manifest V3 browser extension designed to provide global keyboard shortcuts, playback indicators, and media flyout controls specifically for Plex Web (`app.plex.tv`) and user-authorized custom Plex Media Servers.
+Playkeys for Plex Web ("the Extension") is an open-source Manifest V3 browser extension designed to provide global keyboard shortcuts, playback indicators, and media flyout controls specifically for Plex Web (`app.plex.tv`) and user-authorized custom Plex Media Servers.
 
 We believe that privacy is a fundamental right. Playkeys is built with a strict **Zero-Data Collection** policy and adheres strictly to the Principle of Least Privilege and Google Chrome Web Store Developer Program Policies.
 
