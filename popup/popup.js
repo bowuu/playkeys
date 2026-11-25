@@ -72,6 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let detectedTab = null;
   let isUserScrubbing = false;
   let isUserAdjustingVolume = false;
+  let volumeLockUntil = 0;
   let lastVolumeSendAt = 0;
   let pendingVolumeTimer = null;
   let lastArtworkUrl = '';
@@ -321,7 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
       repeatBadge.classList.add('hidden');
     }
 
-    if (!isUserAdjustingVolume) {
+    if (!isUserAdjustingVolume && Date.now() >= volumeLockUntil) {
       const volPercent = Math.round((state.volume ?? 1) * 100);
       const isMuted = !!state.isMuted || volPercent === 0;
 
@@ -493,28 +494,32 @@ document.addEventListener('DOMContentLoaded', () => {
   btnRepeat.addEventListener('click', () => dispatchAndRefresh('toggleRepeat', 200));
   btnMute.addEventListener('click', () => dispatchAndRefresh('toggleMute', 150));
 
-  // Throttled Volume Slider with drag guard
+  // Throttled Volume Slider with drag guard & post-release lock
   function scheduleVolumeSend(val) {
     const now = Date.now();
+    volumeLockUntil = now + 450;
     const elapsed = now - lastVolumeSendAt;
-    if (elapsed >= 50) {
+    if (elapsed >= 80) {
       lastVolumeSendAt = now;
       sendPlayerAction('setVolume', val / 100);
     } else {
       clearTimeout(pendingVolumeTimer);
       pendingVolumeTimer = setTimeout(() => {
         lastVolumeSendAt = Date.now();
+        volumeLockUntil = lastVolumeSendAt + 450;
         sendPlayerAction('setVolume', val / 100);
-      }, 50 - elapsed);
+      }, 80 - elapsed);
     }
   }
 
   volumeSlider.addEventListener('pointerdown', () => {
     isUserAdjustingVolume = true;
+    volumeLockUntil = Date.now() + 450;
   });
 
   volumeSlider.addEventListener('input', () => {
     isUserAdjustingVolume = true;
+    volumeLockUntil = Date.now() + 450;
     const val = parseInt(volumeSlider.value, 10);
     volumePercent.textContent = `${val}%`;
     updateSliderFill(volumeSlider, val);
@@ -528,12 +533,14 @@ document.addEventListener('DOMContentLoaded', () => {
     scheduleVolumeSend(val);
   });
 
-  const endVolumeAdjust = () => {
+  const endVolumeAdjust = async () => {
     if (isUserAdjustingVolume) {
       isUserAdjustingVolume = false;
+      volumeLockUntil = Date.now() + 450;
       clearTimeout(pendingVolumeTimer);
       const val = parseInt(volumeSlider.value, 10);
-      sendPlayerAction('setVolume', val / 100);
+      await sendPlayerAction('setVolume', val / 100);
+      setTimeout(refreshActiveTab, 120);
     }
   };
 

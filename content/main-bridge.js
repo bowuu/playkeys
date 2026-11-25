@@ -6,7 +6,7 @@
  */
 
 (() => {
-  const BRIDGE_VERSION = 4;
+  const BRIDGE_VERSION = 5;
 
   if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
@@ -260,13 +260,14 @@
     return false;
   }
 
-  let activeVolumeOpId = 0;
+  let volumeChain = Promise.resolve(false);
+  let queuedVolumeTarget = null;
+  let volumeInFlight = false;
 
   /**
-   * Set Plex Web's custom VerticalSlider / VolumeSlider value (0..1) so React state & persistence update
+   * Execute a single serialized volume slider interaction on Plex Web
    */
-  async function setPlexVolume(targetValue) {
-    const opId = ++activeVolumeOpId;
+  async function applyPlexVolumeStep(targetValue) {
     const target = Math.max(0, Math.min(1, parseFloat(targetValue) || 0));
     const targetPercent = Math.round(target * 100);
     const slider = document.querySelector(
@@ -282,11 +283,7 @@
     }
 
     const thumb = slider.querySelector('[role="slider"]');
-    const track = slider.querySelector('[class*="thumbTrack"]') || slider;
-    let rect = track.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      rect = slider.getBoundingClientRect();
-    }
+    const rect = slider.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
       return false;
     }
@@ -350,9 +347,6 @@
       slider.dispatchEvent(new MouseEvent('mousedown', mouseDown));
 
       await new Promise((r) => setTimeout(r, 20));
-      if (opId !== activeVolumeOpId) {
-        return true;
-      }
 
       slider.dispatchEvent(new PointerEvent('pointermove', ptrDown));
       slider.dispatchEvent(new MouseEvent('mousemove', mouseDown));
@@ -378,6 +372,33 @@
     }
 
     return false;
+  }
+
+  /**
+   * Coalesce rapid drag calls so mousedown/mouseup always pair cleanly without queuing stale steps
+   */
+  function setPlexVolume(targetValue) {
+    queuedVolumeTarget = targetValue;
+    if (volumeInFlight) {
+      return volumeChain;
+    }
+
+    volumeInFlight = true;
+    volumeChain = (async () => {
+      let lastResult = false;
+      try {
+        while (queuedVolumeTarget !== null) {
+          const next = queuedVolumeTarget;
+          queuedVolumeTarget = null;
+          lastResult = await applyPlexVolumeStep(next);
+        }
+      } finally {
+        volumeInFlight = false;
+      }
+      return lastResult;
+    })();
+
+    return volumeChain;
   }
 
   /**

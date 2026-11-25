@@ -107,7 +107,7 @@
       timeoutId = setTimeout(() => {
         window.removeEventListener('message', responseHandler);
         resolve(false);
-      }, 350);
+      }, 600);
     });
   }
 
