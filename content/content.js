@@ -208,12 +208,12 @@
         '[class*="repeatButton"]'
       ],
       mute: [
+        'button[class*="PlayerControls-volumeButton-"]',
         'button[data-testid="volumeButton"]',
         'button[data-testid="playerVolumeButton"]',
         'button[aria-label*="Mute" i]',
         'button[aria-label*="Unmute" i]',
-        '[data-testid="player-volume-button"]',
-        '[class*="VolumeSlider"] button'
+        '[data-testid="player-volume-button"]'
       ]
     };
 
@@ -685,21 +685,21 @@
       return { success: false };
     },
 
-    volumeUp() {
+    async volumeUp() {
       const media = findActiveMediaElement();
       if (media) {
         const nextVol = Math.min(1, Math.round((media.volume + 0.05) * 100) / 100);
-        actions.setVolume(nextVol);
+        await actions.setVolume(nextVol);
         return { success: true, volume: nextVol };
       }
       return { success: false };
     },
 
-    volumeDown() {
+    async volumeDown() {
       const media = findActiveMediaElement();
       if (media) {
         const nextVol = Math.max(0, Math.round((media.volume - 0.05) * 100) / 100);
-        actions.setVolume(nextVol);
+        await actions.setVolume(nextVol);
         return { success: true, volume: nextVol };
       }
       return { success: false };
@@ -721,8 +721,17 @@
       return { success: false };
     },
 
-    setVolume(value) {
+    async setVolume(value) {
       const target = Math.max(0, Math.min(1, parseFloat(value) || 0));
+
+      // 1. Try Plex Web's custom VerticalSlider / VolumeSlider via main-bridge so React state persists
+      const handledByBridge = await dispatchToBridge('setVolume', target);
+      if (handledByBridge) {
+        setTimeout(() => broadcastState(true), 80);
+        return { success: true, volume: target, method: 'bridge-slider' };
+      }
+
+      // 2. Fallback: Direct HTML5 media element & range input
       const media = findActiveMediaElement();
       if (media) {
         media.volume = target;
