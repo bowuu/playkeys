@@ -99,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeViewTab = 'player';
   let currentQueue = null;
   let lastRenderedQueueKey = '';
+  let lastRenderedItemsKey = '';
 
   /**
    * Build the 5 star slots inside starRatingRow once
@@ -667,6 +668,7 @@ document.addEventListener('DOMContentLoaded', () => {
       queueList.classList.add('hidden');
       queueEmpty.classList.remove('hidden');
       lastRenderedQueueKey = '';
+      lastRenderedItemsKey = '';
       return;
     }
 
@@ -680,11 +682,19 @@ document.addEventListener('DOMContentLoaded', () => {
     queueEmpty.classList.add('hidden');
     queueList.classList.remove('hidden');
 
-    const renderKey = `${queue.playQueueID}:${queue.selectedItemID}:${queue.items.map((i) => i.playQueueItemID).join(',')}`;
+    const itemsKey = queue.items.map((i) => i.playQueueItemID).join(',');
+    const renderKey = `${queue.playQueueID}:${queue.selectedItemID}:${itemsKey}`;
     if (renderKey === lastRenderedQueueKey) return;
     const isInitialRender = !lastRenderedQueueKey;
+    const itemsChanged = Boolean(lastRenderedItemsKey) && lastRenderedItemsKey !== itemsKey;
     const prevScrollTop = queueList.scrollTop;
+    const prevTargetEl =
+      itemsChanged && queue.selectedItemID !== null
+        ? queueList.querySelector(`[data-item-id="${CSS.escape(String(queue.selectedItemID))}"]`)
+        : null;
+    const prevVisualOffset = prevTargetEl ? prevTargetEl.offsetTop - prevScrollTop : null;
     lastRenderedQueueKey = renderKey;
+    lastRenderedItemsKey = itemsKey;
 
     queueList.innerHTML = '';
     const fragment = document.createDocumentFragment();
@@ -697,6 +707,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const rowBtn = document.createElement('button');
       rowBtn.type = 'button';
       rowBtn.className = `queue-item${isSelected ? ' active' : ''}`;
+      rowBtn.dataset.itemId = String(item.playQueueItemID);
       rowBtn.title = `Play ${item.title}`;
 
       const thumbWrap = document.createElement('div');
@@ -770,9 +781,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     queueList.appendChild(fragment);
 
+    const activeRow = queueList.querySelector('.queue-item.active');
     if (isInitialRender) {
-      const activeRow = queueList.querySelector('.queue-item.active');
       if (activeRow) {
+        activeRow.scrollIntoView({ block: 'nearest' });
+      }
+    } else if (itemsChanged) {
+      if (activeRow && prevVisualOffset !== null) {
+        queueList.scrollTop = Math.max(0, activeRow.offsetTop - prevVisualOffset);
+      } else if (activeRow) {
         activeRow.scrollIntoView({ block: 'nearest' });
       }
     } else {
