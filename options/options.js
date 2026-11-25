@@ -11,9 +11,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const navItems = document.querySelectorAll('.nav-item');
   const sections = {
     servers: document.getElementById('section-servers'),
+    preferences: document.getElementById('section-preferences'),
     shortcuts: document.getElementById('section-shortcuts'),
     about: document.getElementById('section-about')
   };
+
+  // Preferences references
+  const ratingModeGrid = document.getElementById('ratingModeGrid');
+  const ratingModeRadios = document.querySelectorAll('input[name="ratingMode"]');
+  const prefsNotice = document.getElementById('prefsNotice');
 
   // Server management references
   const addServerForm = document.getElementById('addServerForm');
@@ -205,4 +211,54 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initial load
   loadServers();
+  loadPreferences();
+
+  /**
+   * Load and bind Popup & Rating Preferences
+   */
+  let prefsNoticeTimer = null;
+  function showPrefsNotice(message) {
+    prefsNotice.textContent = message;
+    prefsNotice.className = 'feedback-msg success';
+    prefsNotice.classList.remove('hidden');
+    clearTimeout(prefsNoticeTimer);
+    prefsNoticeTimer = setTimeout(() => {
+      prefsNotice.classList.add('hidden');
+    }, 3000);
+  }
+
+  function highlightSelectedModeCard(mode) {
+    if (!ratingModeGrid) return;
+    ratingModeGrid.querySelectorAll('.mode-card').forEach((card) => {
+      const isMatch = card.getAttribute('data-mode') === mode;
+      card.classList.toggle('selected', isMatch);
+    });
+  }
+
+  async function loadPreferences() {
+    try {
+      const data = await chrome.storage.sync.get({ ratingMode: 'half_stars' });
+      const mode = data.ratingMode || 'half_stars';
+      ratingModeRadios.forEach((radio) => {
+        radio.checked = radio.value === mode;
+      });
+      highlightSelectedModeCard(mode);
+    } catch (err) {
+      console.warn('[Playkeys Options] Preferences load error:', err);
+    }
+  }
+
+  ratingModeRadios.forEach((radio) => {
+    radio.addEventListener('change', async () => {
+      if (!radio.checked) return;
+      const mode = radio.value;
+      highlightSelectedModeCard(mode);
+      try {
+        await chrome.storage.sync.set({ ratingMode: mode });
+        showPrefsNotice('Rating preference saved.');
+      } catch (err) {
+        console.warn('[Playkeys Options] Preferences save error:', err);
+      }
+    });
+  });
 });

@@ -122,6 +122,115 @@
   }
 
   /**
+   * Locate Plex Web's Radix star-rating widget elements in the player bar
+   */
+  function findRatingElements() {
+    const container = document.querySelector('[class*="PlayerControlsMetadata-container"]');
+    const ratingContainer = document.querySelector('[class*="PlayerControlsMetadata-ratingContainer"]');
+    const sliderRoot = ratingContainer?.querySelector('[dir="ltr"][data-orientation="horizontal"]') || null;
+    const sliderThumb = ratingContainer?.querySelector('[role="slider"]') || null;
+    return { container, ratingContainer, sliderRoot, sliderThumb };
+  }
+
+  /**
+   * Read the current 0..10 userRating from Plex Web's rating slider
+   */
+  function getCurrentRating() {
+    const { sliderThumb } = findRatingElements();
+    if (!sliderThumb) return null;
+    const val = parseInt(sliderThumb.getAttribute('aria-valuenow'), 10);
+    return Number.isFinite(val) ? val : 0;
+  }
+
+  /**
+   * Set Plex Web's 0..10 userRating via Radix Slider pointer coordinates or React fiber fallback
+   */
+  function setRating(targetValue) {
+    const clamped = Math.max(0, Math.min(10, Math.round(Number(targetValue) || 0)));
+    const { container, sliderRoot, sliderThumb } = findRatingElements();
+    if (!sliderRoot || !sliderThumb) return false;
+
+    if (container) {
+      container.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, cancelable: true }));
+      container.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+    }
+
+    const rect = sliderRoot.getBoundingClientRect();
+    if (rect.width > 0) {
+      const clientX = rect.left + (clamped / 10) * rect.width;
+      const clientY = rect.top + rect.height / 2;
+
+      const origSetCapture = Element.prototype.setPointerCapture;
+      const origReleaseCapture = Element.prototype.releasePointerCapture;
+      const origHasCapture = Element.prototype.hasPointerCapture;
+      Element.prototype.setPointerCapture = function () {};
+      Element.prototype.releasePointerCapture = function () {};
+      Element.prototype.hasPointerCapture = function () {
+        return false;
+      };
+
+      try {
+        const common = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          pointerId: 1,
+          pointerType: 'mouse',
+          isPrimary: true,
+          button: 0,
+          buttons: 1
+        };
+        sliderRoot.dispatchEvent(new PointerEvent('pointerover', common));
+        sliderRoot.dispatchEvent(new PointerEvent('pointerenter', { ...common, bubbles: false }));
+        sliderRoot.dispatchEvent(new PointerEvent('pointerdown', common));
+        sliderRoot.dispatchEvent(new PointerEvent('pointermove', common));
+        sliderRoot.dispatchEvent(new PointerEvent('pointerup', { ...common, buttons: 0 }));
+        sliderRoot.dispatchEvent(
+          new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX,
+            clientY,
+            button: 0
+          })
+        );
+      } finally {
+        Element.prototype.setPointerCapture = origSetCapture;
+        Element.prototype.releasePointerCapture = origReleaseCapture;
+        Element.prototype.hasPointerCapture = origHasCapture;
+      }
+
+      if (getCurrentRating() === clamped) {
+        return true;
+      }
+    }
+
+    // Fallback: invoke Radix Slider React onValueChange / onValueCommit props directly
+    const fiberKey = Object.keys(sliderRoot).find(
+      (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+    );
+    let fiber = fiberKey ? sliderRoot[fiberKey] : null;
+    let steps = 0;
+    while (fiber && steps < 12) {
+      const props = fiber.memoizedProps || fiber.pendingProps;
+      if (props && typeof props.onValueChange === 'function') {
+        props.onValueChange([clamped]);
+        if (typeof props.onValueCommit === 'function') {
+          props.onValueCommit([clamped]);
+        }
+        return true;
+      }
+      fiber = fiber.return;
+      steps += 1;
+    }
+
+    return false;
+  }
+
+  /**
    * Listen for action dispatches from the isolated content script
    */
   window.addEventListener('message', (event) => {
@@ -174,6 +283,18 @@
 
         case 'seek': {
           handled = invokeHandler('seekto', { seekTime: parseFloat(value) || 0 });
+          break;
+        }
+
+        case 'setRating': {
+          handled = setRating(value);
+          result = getCurrentRating();
+          break;
+        }
+
+        case 'getRating': {
+          result = getCurrentRating();
+          handled = result !== null;
           break;
         }
 

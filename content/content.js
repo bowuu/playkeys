@@ -419,6 +419,17 @@
       isPlaying
     );
 
+    // Check Plex Web star rating slider (0..10 scale)
+    const ratingSlider = document.querySelector(
+      '[class*="PlayerControlsMetadata-ratingContainer"] [role="slider"]'
+    );
+    const canRate = Boolean(ratingSlider);
+    let userRating = null;
+    if (ratingSlider) {
+      const parsedRating = parseInt(ratingSlider.getAttribute('aria-valuenow'), 10);
+      userRating = Number.isFinite(parsedRating) ? parsedRating : 0;
+    }
+
     return {
       hasMedia,
       isPlaying,
@@ -429,6 +440,8 @@
       isMuted,
       isShuffle,
       repeatMode,
+      canRate,
+      userRating,
       title: meta.title || (isPlaying ? 'Plex Playback' : 'Idle'),
       artist: meta.artist || '',
       album: meta.album || '',
@@ -461,6 +474,8 @@
       lastBroadcastState.artworkUrl === state.artworkUrl &&
       lastBroadcastState.isShuffle === state.isShuffle &&
       lastBroadcastState.repeatMode === state.repeatMode &&
+      lastBroadcastState.canRate === state.canRate &&
+      lastBroadcastState.userRating === state.userRating &&
       lastBroadcastState.duration === state.duration &&
       Math.abs(lastBroadcastState.currentTime - state.currentTime) < 0.9 &&
       lastBroadcastState.isMuted === state.isMuted &&
@@ -760,6 +775,16 @@
         return { success: true };
       }
       return { success: false };
+    },
+
+    async setRating(value) {
+      const target = Math.max(0, Math.min(10, Math.round(Number(value) || 0)));
+      const handled = await dispatchToBridge('setRating', target);
+      if (handled) {
+        setTimeout(() => broadcastState(true), 120);
+        return { success: true, userRating: target };
+      }
+      return { success: false, error: 'Rating widget unavailable' };
     },
 
     getState() {

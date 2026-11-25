@@ -1,10 +1,16 @@
 /**
  * Playkeys - Popup Controller
  * Manages UI updates, user interactions, timeline scrubbing,
- * quick server authorization, and player control dispatching.
+ * track ratings (5-star half/whole & thumbs), quick server authorization,
+ * and player control dispatching.
  */
 
 import { normalizeServerInput, saveCustomServer } from '../shared/servers.js';
+
+const STAR_FULL_PATH =
+  'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z';
+const STAR_HALF_PATH =
+  'M12 2L9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27Z';
 
 document.addEventListener('DOMContentLoaded', () => {
   // DOM References
@@ -25,6 +31,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackTitle = document.getElementById('trackTitle');
   const trackArtist = document.getElementById('trackArtist');
   const trackAlbum = document.getElementById('trackAlbum');
+
+  // Rating Controls
+  const ratingSection = document.getElementById('ratingSection');
+  const starRatingRow = document.getElementById('starRatingRow');
+  const thumbsRatingRow = document.getElementById('thumbsRatingRow');
+  const btnThumbDown = document.getElementById('btnThumbDown');
+  const btnThumbUp = document.getElementById('btnThumbUp');
+  const ratingValueLabel = document.getElementById('ratingValueLabel');
 
   // Timeline
   const currentTimeEl = document.getElementById('currentTime');
@@ -61,6 +75,99 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastVolumeSendAt = 0;
   let pendingVolumeTimer = null;
   let lastArtworkUrl = '';
+  let ratingMode = 'half_stars';
+  let hoverRating = null;
+
+  /**
+   * Build the 5 star slots inside starRatingRow once
+   */
+  function initStarSlots() {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    starRatingRow.innerHTML = '';
+    for (let i = 0; i < 5; i += 1) {
+      const slot = document.createElement('span');
+      slot.className = 'star-slot';
+      const svg = document.createElementNS(svgNS, 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('width', '18');
+      svg.setAttribute('height', '18');
+
+      const bgPath = document.createElementNS(svgNS, 'path');
+      bgPath.setAttribute('class', 'star-bg');
+      bgPath.setAttribute('d', STAR_FULL_PATH);
+
+      const fgPath = document.createElementNS(svgNS, 'path');
+      fgPath.setAttribute('class', 'star-fg');
+      fgPath.setAttribute('d', '');
+
+      svg.appendChild(bgPath);
+      svg.appendChild(fgPath);
+      slot.appendChild(svg);
+      starRatingRow.appendChild(slot);
+    }
+  }
+
+  /**
+   * Paint star SVGs and label for a 0..10 rating value
+   */
+  function paintStars(value) {
+    const val = Math.max(0, Math.min(10, Math.round(value || 0)));
+    const slots = starRatingRow.querySelectorAll('.star-slot');
+    slots.forEach((slot, idx) => {
+      const fg = slot.querySelector('.star-fg');
+      const fullThreshold = (idx + 1) * 2;
+      const halfThreshold = fullThreshold - 1;
+      if (val >= fullThreshold) {
+        fg.setAttribute('d', STAR_FULL_PATH);
+      } else if (val === halfThreshold) {
+        fg.setAttribute('d', STAR_HALF_PATH);
+      } else {
+        fg.setAttribute('d', '');
+      }
+    });
+    starRatingRow.setAttribute('aria-valuenow', String(val));
+  }
+
+  /**
+   * Format rating label text for display
+   */
+  function formatRatingLabel(val) {
+    if (!val || val <= 0) return 'Unrated';
+    if (ratingMode === 'thumbs') {
+      if (val >= 7) return 'Liked';
+      if (val <= 4) return 'Disliked';
+      return `${(val / 2).toFixed(val % 2 ? 1 : 0)} / 5`;
+    }
+    const stars = val / 2;
+    return `${Number.isInteger(stars) ? stars : stars.toFixed(1)} / 5`;
+  }
+
+  /**
+   * Render rating section visibility and controls
+   */
+  function renderRating(state) {
+    if (ratingMode === 'off' || !state || !state.canRate) {
+      ratingSection.classList.add('hidden');
+      return;
+    }
+
+    ratingSection.classList.remove('hidden');
+    const actualVal = Number.isFinite(state.userRating) ? state.userRating : 0;
+    const displayVal = hoverRating !== null ? hoverRating : actualVal;
+
+    if (ratingMode === 'thumbs') {
+      starRatingRow.classList.add('hidden');
+      thumbsRatingRow.classList.remove('hidden');
+      btnThumbUp.classList.toggle('active', actualVal >= 7);
+      btnThumbDown.classList.toggle('active', actualVal >= 1 && actualVal <= 4);
+      ratingValueLabel.textContent = formatRatingLabel(actualVal);
+    } else {
+      thumbsRatingRow.classList.add('hidden');
+      starRatingRow.classList.remove('hidden');
+      paintStars(displayVal);
+      ratingValueLabel.textContent = formatRatingLabel(displayVal);
+    }
+  }
 
   /**
    * Format seconds to m:ss or h:mm:ss
@@ -120,7 +227,6 @@ document.addEventListener('DOMContentLoaded', () => {
     currentState = state;
     detectedTab = unconfigured;
 
-    // Handle Unconfigured Local Server Banner
     if (unconfigured && !tab) {
       unconfiguredBanner.classList.remove('hidden');
       try {
@@ -163,6 +269,7 @@ document.addEventListener('DOMContentLoaded', () => {
       trackArtist.textContent = 'Waiting for media to play...';
       trackAlbum.textContent = '';
       updateArtwork('');
+      renderRating(null);
       return;
     }
 
@@ -171,6 +278,7 @@ document.addEventListener('DOMContentLoaded', () => {
     trackAlbum.textContent = state.album || '';
 
     updateArtwork(state.artworkUrl);
+    renderRating(state);
 
     if (state.isPlaying) {
       iconPlay.classList.add('hidden');
@@ -199,11 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (state.isShuffle) {
-      btnShuffle.classList.add('active');
-    } else {
-      btnShuffle.classList.remove('active');
-    }
+    btnShuffle.classList.toggle('active', Boolean(state.isShuffle));
 
     if (state.repeatMode === 'one') {
       btnRepeat.classList.add('active');
@@ -273,6 +377,69 @@ document.addEventListener('DOMContentLoaded', () => {
       renderState(null, null, null);
     }
   }
+
+  /**
+   * Compute star rating (1..10) from pointer X coordinate over starRatingRow
+   */
+  function getStarValueFromPointer(event) {
+    const rect = starRatingRow.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    if (ratingMode === 'whole_stars') {
+      return Math.max(1, Math.min(5, Math.ceil(ratio * 5))) * 2;
+    }
+    return Math.max(1, Math.min(10, Math.ceil(ratio * 10)));
+  }
+
+  async function commitRating(nextRating) {
+    if (currentState) {
+      currentState.userRating = nextRating;
+      renderRating(currentState);
+    }
+    await sendPlayerAction('setRating', nextRating);
+    setTimeout(refreshActiveTab, 180);
+  }
+
+  starRatingRow.addEventListener('mousemove', (e) => {
+    hoverRating = getStarValueFromPointer(e);
+    renderRating(currentState);
+  });
+
+  starRatingRow.addEventListener('mouseleave', () => {
+    hoverRating = null;
+    renderRating(currentState);
+  });
+
+  starRatingRow.addEventListener('click', (e) => {
+    const picked = getStarValueFromPointer(e);
+    const current = currentState?.userRating || 0;
+    const nextRating = picked === current ? 0 : picked;
+    hoverRating = null;
+    commitRating(nextRating);
+  });
+
+  starRatingRow.addEventListener('keydown', (e) => {
+    if (!currentState?.canRate) return;
+    const step = ratingMode === 'whole_stars' ? 2 : 1;
+    const current = currentState.userRating || 0;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      commitRating(Math.min(10, current + step));
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      commitRating(Math.max(0, current - step));
+    }
+  });
+
+  btnThumbUp.addEventListener('click', () => {
+    const current = currentState?.userRating || 0;
+    commitRating(current >= 7 ? 0 : 10);
+  });
+
+  btnThumbDown.addEventListener('click', () => {
+    const current = currentState?.userRating || 0;
+    commitRating(current >= 1 && current <= 4 ? 0 : 2);
+  });
 
   // Handle Timeline Scrubbing
   seekBar.addEventListener('pointerdown', () => {
@@ -421,9 +588,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Polling to keep time smooth while popup is visible
-  setInterval(refreshActiveTab, 1000);
+  // Sync rating preference changes immediately
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'sync' && changes.ratingMode) {
+      ratingMode = changes.ratingMode.newValue || 'half_stars';
+      renderRating(currentState);
+    }
+  });
 
-  // Initial fetch
+  // Initialization
+  initStarSlots();
+  chrome.storage.sync
+    .get({ ratingMode: 'half_stars' })
+    .then((data) => {
+      ratingMode = data.ratingMode || 'half_stars';
+      renderRating(currentState);
+    })
+    .catch(() => {});
+
+  setInterval(refreshActiveTab, 1000);
   refreshActiveTab();
 });
