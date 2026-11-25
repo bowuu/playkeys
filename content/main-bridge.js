@@ -6,7 +6,7 @@
  */
 
 (() => {
-  const BRIDGE_VERSION = 9;
+  const BRIDGE_VERSION = 10;
 
   if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
@@ -74,6 +74,35 @@
   }
 
   /**
+   * Resolve audio/video codec and bitrate for the currently playing item
+   */
+  function getCurrentMediaQuality(titleHint = '') {
+    try {
+      const items = queueStore.queue?.items;
+      if (Array.isArray(items) && items.length > 0) {
+        const selectedId = queueStore.queue?.selectedItemID;
+        let match = selectedId
+          ? items.find((it) => Number(it.playQueueItemID) === Number(selectedId))
+          : null;
+        if (!match && titleHint) {
+          const lower = titleHint.trim().toLowerCase();
+          match = items.find((it) => (it.title || '').trim().toLowerCase() === lower);
+        }
+        if (match && (match.audioCodec || match.videoCodec || match.bitrate)) {
+          return {
+            audioCodec: match.audioCodec || '',
+            videoCodec: match.videoCodec || '',
+            bitrate: Number(match.bitrate) || 0
+          };
+        }
+      }
+    } catch {
+      // Ignore lookup errors
+    }
+    return { audioCodec: '', videoCodec: '', bitrate: 0 };
+  }
+
+  /**
    * Extract high-fidelity metadata from page-context MediaSession
    */
   function inspectPageMetadata() {
@@ -84,11 +113,15 @@
         if (meta.artwork && meta.artwork.length > 0) {
           artworkUrl = meta.artwork[meta.artwork.length - 1].src || '';
         }
+        const quality = getCurrentMediaQuality(meta.title || '');
         return {
           title: meta.title || '',
           artist: meta.artist || '',
           album: meta.album || '',
-          artworkUrl
+          artworkUrl,
+          audioCodec: quality.audioCodec,
+          videoCodec: quality.videoCodec,
+          bitrate: quality.bitrate
         };
       }
     } catch (err) {
@@ -122,7 +155,10 @@
       lastReportedMeta.title !== meta.title ||
       lastReportedMeta.artist !== meta.artist ||
       lastReportedMeta.album !== meta.album ||
-      lastReportedMeta.artworkUrl !== meta.artworkUrl
+      lastReportedMeta.artworkUrl !== meta.artworkUrl ||
+      lastReportedMeta.audioCodec !== meta.audioCodec ||
+      lastReportedMeta.videoCodec !== meta.videoCodec ||
+      lastReportedMeta.bitrate !== meta.bitrate
     ) {
       lastReportedMeta = meta;
       window.postMessage(
@@ -431,6 +467,7 @@
       },
       '*'
     );
+    checkAndBroadcastMetadata();
   }
 
   /**
@@ -440,6 +477,7 @@
     const metadataList = Array.isArray(mc.Metadata) ? mc.Metadata : [];
     const items = metadataList.map((item) => {
       const thumbPath = item.thumb || item.parentThumb || item.grandparentThumb || '';
+      const media0 = Array.isArray(item.Media) ? item.Media[0] : null;
       return {
         playQueueItemID: Number(item.playQueueItemID) || null,
         ratingKey: item.ratingKey ? String(item.ratingKey) : '',
@@ -448,7 +486,10 @@
         artist: item.originalTitle || item.grandparentTitle || '',
         album: item.parentTitle || '',
         duration: Math.round((Number(item.duration) || 0) / 1000),
-        artworkUrl: buildQueueArtworkUrl(thumbPath, serverOrigin, token)
+        artworkUrl: buildQueueArtworkUrl(thumbPath, serverOrigin, token),
+        audioCodec: media0?.audioCodec ? String(media0.audioCodec).toUpperCase() : '',
+        videoCodec: media0?.videoCodec ? String(media0.videoCodec).toUpperCase() : '',
+        bitrate: Number(media0?.bitrate) || 0
       };
     });
 

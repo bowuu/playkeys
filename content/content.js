@@ -475,6 +475,9 @@
       artist: meta.artist || '',
       album: meta.album || '',
       artworkUrl: meta.artworkUrl || '',
+      audioCodec: bridgeMetadata?.audioCodec || '',
+      videoCodec: bridgeMetadata?.videoCodec || '',
+      bitrate: Number(bridgeMetadata?.bitrate) || 0,
       pageUrl: window.location.href,
       timestamp: Date.now()
     };
@@ -501,6 +504,9 @@
       lastBroadcastState.artist === state.artist &&
       lastBroadcastState.album === state.album &&
       lastBroadcastState.artworkUrl === state.artworkUrl &&
+      lastBroadcastState.audioCodec === state.audioCodec &&
+      lastBroadcastState.videoCodec === state.videoCodec &&
+      lastBroadcastState.bitrate === state.bitrate &&
       lastBroadcastState.isShuffle === state.isShuffle &&
       lastBroadcastState.repeatMode === state.repeatMode &&
       lastBroadcastState.canRate === state.canRate &&

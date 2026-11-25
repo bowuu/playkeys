@@ -265,12 +265,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: 360px;
 }
 
 /* Queue Panel */
 .queue-panel {
   gap: 10px;
+  height: var(--queue-panel-height, 357px);
+}
+
+.player-card.compact-panel {
+  --queue-panel-height: 313px;
 }
 
 .queue-header {
@@ -465,7 +469,7 @@ body {
 
 .track-title {
   width: 100%;
-  font-size: 13px;
+  font-size: 14.5px;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
@@ -475,22 +479,40 @@ body {
 
 .track-artist {
   width: 100%;
+  font-size: 13px;
+  font-weight: 500;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.track-album {
+  width: 100%;
   font-size: 12px;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
-.track-album {
-  width: 100%;
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 1px;
+.audio-quality-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
 }
 
 /* Rating Section */

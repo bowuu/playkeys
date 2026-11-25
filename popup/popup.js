@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackTitle = document.getElementById('trackTitle');
   const trackArtist = document.getElementById('trackArtist');
   const trackAlbum = document.getElementById('trackAlbum');
+  const audioQualityBadge = document.getElementById('audioQualityBadge');
 
   // Rating Controls
   const ratingSection = document.getElementById('ratingSection');
@@ -171,10 +172,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderRating(state) {
     if (ratingMode === 'off' || !state || !state.canRate) {
       ratingSection.classList.add('hidden');
+      playerCard.classList.add('compact-panel');
       return;
     }
 
     ratingSection.classList.remove('hidden');
+    playerCard.classList.remove('compact-panel');
     const actualVal = Number.isFinite(state.userRating) ? state.userRating : 0;
     const displayVal = hoverRating !== null ? hoverRating : actualVal;
 
@@ -292,6 +295,7 @@ document.addEventListener('DOMContentLoaded', () => {
       trackTitle.textContent = 'Plex Connected';
       trackArtist.textContent = 'Waiting for media to play...';
       trackAlbum.textContent = '';
+      audioQualityBadge.classList.add('hidden');
       updateArtwork('');
       renderRating(null);
       return;
@@ -300,6 +304,25 @@ document.addEventListener('DOMContentLoaded', () => {
     trackTitle.textContent = state.title || (state.hasMedia ? 'Plex Playback' : 'Idle');
     trackArtist.textContent = state.artist || (state.isPlaying ? 'Now Playing' : 'Plex Player');
     trackAlbum.textContent = state.album || '';
+
+    let qualityText = '';
+    if (state.hasMedia) {
+      if (state.videoCodec && state.audioCodec) {
+        qualityText = `${state.videoCodec} • ${state.audioCodec}`;
+      } else if (state.audioCodec && state.bitrate > 0) {
+        qualityText = `${state.audioCodec} • ${state.bitrate} kbps`;
+      } else if (state.audioCodec) {
+        qualityText = state.audioCodec;
+      } else if (state.bitrate > 0) {
+        qualityText = `${state.bitrate} kbps`;
+      }
+    }
+    if (qualityText) {
+      audioQualityBadge.textContent = qualityText;
+      audioQualityBadge.classList.remove('hidden');
+    } else {
+      audioQualityBadge.classList.add('hidden');
+    }
 
     updateArtwork(state.artworkUrl);
     renderRating(state);
@@ -640,6 +663,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function switchViewTab(tabName) {
     activeViewTab = tabName === 'queue' ? 'queue' : 'player';
     const isQueue = activeViewTab === 'queue';
+
+    if (isQueue && !tabPlayerPanel.classList.contains('hidden') && tabPlayerPanel.offsetHeight > 0) {
+      playerCard.style.setProperty('--queue-panel-height', `${tabPlayerPanel.offsetHeight}px`);
+    }
 
     tabBtnPlayer.classList.toggle('active', !isQueue);
     tabBtnPlayer.setAttribute('aria-selected', String(!isQueue));
