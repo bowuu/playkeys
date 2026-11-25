@@ -82,6 +82,10 @@
           event.data.type === 'ACTION_RESPONSE' &&
           event.data.requestId === requestId
         ) {
+          // Ignore negative responses from an older pre-v2 bridge instance if still loaded
+          if (!event.data.handled && !event.data.bridgeVersion) {
+            return;
+          }
           clearTimeout(timeoutId);
           window.removeEventListener('message', responseHandler);
           resolve(event.data.handled);
@@ -103,7 +107,7 @@
       timeoutId = setTimeout(() => {
         window.removeEventListener('message', responseHandler);
         resolve(false);
-      }, 150);
+      }, 350);
     });
   }
 

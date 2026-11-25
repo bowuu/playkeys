@@ -6,21 +6,41 @@
  */
 
 (() => {
-  if (window.__PLAYKEYS_MAIN_BRIDGE_INITIALIZED__) {
+  const BRIDGE_VERSION = 2;
+
+  if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
   }
-  window.__PLAYKEYS_MAIN_BRIDGE_INITIALIZED__ = true;
 
-  // Stored references to Plex's MediaSession action handlers
-  const plexHandlers = new Map();
+  if (typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
+    try {
+      window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__();
+    } catch {
+      // Ignore cleanup errors from prior version
+    }
+  }
+
+  window.__PLAYKEYS_MAIN_BRIDGE_INITIALIZED__ = true;
+  window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ = BRIDGE_VERSION;
+
+  // Preserve captured MediaSession handlers across extension reloads
+  const plexHandlers = (window.__PLAYKEYS_MEDIA_HANDLERS__ =
+    window.__PLAYKEYS_MEDIA_HANDLERS__ || new Map());
   let lastReportedMeta = null;
 
   /**
-   * Hook window.navigator.mediaSession.setActionHandler
+   * Hook window.navigator.mediaSession.setActionHandler once
    * so we can directly trigger Plex's internal React/Redux player handlers
    */
-  if (window.navigator && window.navigator.mediaSession) {
-    const originalSetActionHandler = window.navigator.mediaSession.setActionHandler.bind(window.navigator.mediaSession);
+  if (
+    window.navigator &&
+    window.navigator.mediaSession &&
+    !window.__PLAYKEYS_MEDIA_SESSION_HOOKED__
+  ) {
+    window.__PLAYKEYS_MEDIA_SESSION_HOOKED__ = true;
+    const originalSetActionHandler = window.navigator.mediaSession.setActionHandler.bind(
+      window.navigator.mediaSession
+    );
 
     window.navigator.mediaSession.setActionHandler = function (action, handler) {
       if (typeof handler === 'function') {
@@ -109,7 +129,7 @@
   }
 
   // Periodic metadata check (Plex updates mediaSession when tracks start/change/stop)
-  setInterval(checkAndBroadcastMetadata, 800);
+  const metaTimerId = setInterval(checkAndBroadcastMetadata, 800);
 
   /**
    * Invoke a registered MediaSession action handler with standard details payload
@@ -145,7 +165,7 @@
   /**
    * Set Plex Web's 0..10 userRating via Radix Slider pointer coordinates or React fiber fallback
    */
-  function setRating(targetValue) {
+  async function setRating(targetValue) {
     const clamped = Math.max(0, Math.min(10, Math.round(Number(targetValue) || 0)));
     const { container, sliderRoot, sliderThumb } = findRatingElements();
     if (!sliderRoot || !sliderThumb) return false;
@@ -160,13 +180,19 @@
       const clientX = rect.left + (clamped / 10) * rect.width;
       const clientY = rect.top + rect.height / 2;
 
+      const capturedPointers = new Set();
       const origSetCapture = Element.prototype.setPointerCapture;
       const origReleaseCapture = Element.prototype.releasePointerCapture;
       const origHasCapture = Element.prototype.hasPointerCapture;
-      Element.prototype.setPointerCapture = function () {};
-      Element.prototype.releasePointerCapture = function () {};
-      Element.prototype.hasPointerCapture = function () {
-        return false;
+
+      Element.prototype.setPointerCapture = function (id) {
+        capturedPointers.add(id);
+      };
+      Element.prototype.releasePointerCapture = function (id) {
+        capturedPointers.delete(id);
+      };
+      Element.prototype.hasPointerCapture = function (id) {
+        return capturedPointers.has(id) || origHasCapture.call(this, id);
       };
 
       try {
@@ -186,6 +212,10 @@
         sliderRoot.dispatchEvent(new PointerEvent('pointerenter', { ...common, bubbles: false }));
         sliderRoot.dispatchEvent(new PointerEvent('pointerdown', common));
         sliderRoot.dispatchEvent(new PointerEvent('pointermove', common));
+
+        // Let React flush the updated value before pointerup triggers onValueCommit
+        await new Promise((r) => setTimeout(r, 35));
+
         sliderRoot.dispatchEvent(new PointerEvent('pointerup', { ...common, buttons: 0 }));
         sliderRoot.dispatchEvent(
           new MouseEvent('click', {
@@ -233,7 +263,7 @@
   /**
    * Listen for action dispatches from the isolated content script
    */
-  window.addEventListener('message', (event) => {
+  const onMessage = async (event) => {
     if (event.source !== window || !event.data || event.data.source !== 'PLAYKEYS_CONTENT_SCRIPT') {
       return;
     }
@@ -287,7 +317,7 @@
         }
 
         case 'setRating': {
-          handled = setRating(value);
+          handled = await setRating(value);
           result = getCurrentRating();
           break;
         }
@@ -312,15 +342,23 @@
       {
         source: 'PLAYKEYS_PAGE_BRIDGE',
         type: 'ACTION_RESPONSE',
+        bridgeVersion: BRIDGE_VERSION,
         requestId,
         handled,
         result
       },
       '*'
     );
-  });
+  };
+
+  window.addEventListener('message', onMessage);
+
+  window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ = () => {
+    clearInterval(metaTimerId);
+    window.removeEventListener('message', onMessage);
+  };
 
   // Initial metadata check
   checkAndBroadcastMetadata();
-  console.log('[Playkeys Bridge] Page-context MediaSession bridge initialized.');
+  console.log('[Playkeys Bridge] Page-context MediaSession bridge initialized (v' + BRIDGE_VERSION + ').');
 })();
