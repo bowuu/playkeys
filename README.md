@@ -25,11 +25,11 @@ A Chrome extension that adds global media keys, playback status badges, and a po
 | **Next Track** | `MediaNextTrack` | Global | Skip to next track or episode |
 | **Previous Track** | `MediaPrevTrack` | Global | Return to previous track or restart current |
 | **Stop** | `MediaStop` | Global | Stop playback and clear badge |
-| **Volume Up** | `Alt` + `Shift` + `Up` | In Chrome | Increase volume by 5% |
-| **Volume Down** | `Alt` + `Shift` + `Down` | In Chrome | Decrease volume by 5% |
-| **Toggle Mute** | `Alt` + `Shift` + `M` | In Chrome | Mute / unmute audio |
+| **Volume Up** | *Unassigned* | In Chrome / Global | Increase volume by 5% |
+| **Volume Down** | *Unassigned* | In Chrome / Global | Decrease volume by 5% |
+| **Toggle Mute** | *Unassigned* | In Chrome / Global | Mute / unmute audio |
 
-Shortcuts can be customized at `chrome://extensions/shortcuts`.
+Shortcuts (including optional volume keys, due to Chrome's 4-default-shortcut limit) can be customized at `chrome://extensions/shortcuts`.
 
 ---
 

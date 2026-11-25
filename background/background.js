@@ -1,14 +1,23 @@
 /**
  * Playkeys - Background Service Worker (Manifest V3)
- * Handles tab discovery, auto-injection on startup, command routing,
- * toolbar squircle badges, and tab focusing.
+ * Handles tab discovery, session state persistence, auto-injection,
+ * command routing, toolbar squircle badges, and tab focusing.
  */
 
-// In-memory tab states: tabId -> state object
+import { isOfficialPlexUrl, matchesOriginPattern } from '../shared/servers.js';
+
+// In-memory cache hydrated from chrome.storage.session on service worker wake-up
 const tabStates = new Map();
 let lastActivePlexTabId = null;
+let sessionLoaded = false;
+let sessionLoadPromise = null;
 
-const DYNAMIC_SCRIPT_ID = 'playkeys-custom-origins';
+const DYNAMIC_SCRIPT_MAIN_ID = 'playkeys-custom-origins-main';
+const DYNAMIC_SCRIPT_ISOLATED_ID = 'playkeys-custom-origins-isolated';
+const LEGACY_DYNAMIC_SCRIPT_ID = 'playkeys-custom-origins';
+
+// Serialized promise chain for toolbar badge updates to avoid race conditions
+let badgeQueue = Promise.resolve();
 
 // Badge appearance definitions
 const BADGE_COLORS = {
@@ -19,12 +28,78 @@ const BADGE_COLORS = {
 };
 
 /**
- * Get all configured custom origins from storage
+ * Hydrate tabStates and lastActivePlexTabId from chrome.storage.session
  */
-async function getConfiguredCustomOrigins() {
+async function ensureSessionLoaded() {
+  if (sessionLoaded) return;
+  if (sessionLoadPromise) return sessionLoadPromise;
+
+  sessionLoadPromise = (async () => {
+    try {
+      if (chrome.storage.session) {
+        const data = await chrome.storage.session.get({
+          sessionTabStates: {},
+          lastActivePlexTabId: null
+        });
+        for (const [idStr, state] of Object.entries(data.sessionTabStates || {})) {
+          const id = Number(idStr);
+          if (Number.isInteger(id) && state) {
+            tabStates.set(id, state);
+          }
+        }
+        if (Number.isInteger(data.lastActivePlexTabId)) {
+          lastActivePlexTabId = data.lastActivePlexTabId;
+        }
+      }
+    } catch (err) {
+      console.warn('[Playkeys Background] Session load error:', err);
+    } finally {
+      sessionLoaded = true;
+      sessionLoadPromise = null;
+    }
+  })();
+
+  return sessionLoadPromise;
+}
+
+/**
+ * Persist tabStates and lastActivePlexTabId to chrome.storage.session
+ */
+async function persistSessionState() {
+  try {
+    if (!chrome.storage.session) return;
+    const serialized = {};
+    for (const [tabId, state] of tabStates.entries()) {
+      serialized[String(tabId)] = state;
+    }
+    await chrome.storage.session.set({
+      sessionTabStates: serialized,
+      lastActivePlexTabId
+    });
+  } catch (err) {
+    console.warn('[Playkeys Background] Session persist error:', err);
+  }
+}
+
+/**
+ * Get configured custom origins whose runtime host permissions are currently granted
+ */
+async function getGrantedCustomOrigins() {
   try {
     const data = await chrome.storage.sync.get({ customOrigins: [] });
-    return data.customOrigins || [];
+    const configured = Array.isArray(data.customOrigins) ? data.customOrigins : [];
+    if (configured.length === 0) return [];
+
+    const granted = [];
+    for (const origin of configured) {
+      try {
+        const ok = await chrome.permissions.contains({ origins: [origin] });
+        if (ok) granted.push(origin);
+      } catch {
+        // Ignore malformed pattern
+      }
+    }
+    return granted;
   } catch (err) {
     console.warn('[Playkeys Background] Storage access error:', err);
     return [];
@@ -32,41 +107,45 @@ async function getConfiguredCustomOrigins() {
 }
 
 /**
- * Determine if a URL is a recognized Plex URL
+ * Determine if a URL is an authorized Plex Web URL (official or granted custom origin)
  */
-async function isPlexUrl(url) {
+async function isConfiguredPlexUrl(url) {
   if (!url) return false;
-  if (/^https?:\/\/app\.plex\.tv\//i.test(url)) return true;
+  if (isOfficialPlexUrl(url)) return true;
 
-  const customOrigins = await getConfiguredCustomOrigins();
-  for (const origin of customOrigins) {
-    const regexStr = '^' + origin.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
-    if (new RegExp(regexStr).test(url)) {
-      return true;
-    }
-  }
-
-  // Also recognize local Plex servers if navigated to web client
-  if (url.includes(':32400/web') || url.includes('/web/index.html#!/')) {
-    return true;
-  }
-
-  return false;
+  const customOrigins = await getGrantedCustomOrigins();
+  return customOrigins.some((origin) => matchesOriginPattern(url, origin));
 }
 
 /**
- * Update toolbar squircle badge according to current playback state
+ * Detect tabs that look like a local/self-hosted Plex server without granted permissions
  */
-async function updateToolbarBadge(tabId, state) {
+function isLikelyUnconfiguredPlexUrl(url) {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  return url.includes(':32400') || url.includes('/web/index.html');
+}
+
+/**
+ * Serialize badge updates to keep icon text, background color, and title consistent
+ */
+function enqueueBadgeUpdate(task) {
+  badgeQueue = badgeQueue.then(task).catch((err) => {
+    console.warn('[Playkeys Background] Badge update notice:', err);
+  });
+  return badgeQueue;
+}
+
+/**
+ * Apply toolbar squircle badge state
+ */
+async function applyToolbarBadge(state, emptyTitle = 'Playkeys (Idle)') {
   if (!state || !state.hasMedia || (state.isPaused && !state.isPlaying && state.currentTime === 0)) {
-    // Clear completely when stopped or no media
     await chrome.action.setBadgeText({ text: '' });
-    await chrome.action.setTitle({ title: 'Playkeys (Idle)' });
+    await chrome.action.setTitle({ title: emptyTitle });
     return;
   }
 
   if (state.isPlaying) {
-    // Squircle badge: Play indicator (Amber/Orange background, black triangle filling squircle with balanced margins)
     await chrome.action.setBadgeText({ text: '▶' });
     await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLORS.PLAY_BG });
     if (chrome.action.setBadgeTextColor) {
@@ -75,7 +154,6 @@ async function updateToolbarBadge(tabId, state) {
     const metaTitle = state.title ? `${state.title}${state.artist ? ' - ' + state.artist : ''}` : 'Playing';
     await chrome.action.setTitle({ title: `Playkeys: ▶ ${metaTitle}` });
   } else if (state.isPaused) {
-    // Squircle badge: Pause indicator (Single solid red background, same-sized squircle, vertically centered white bars spaced 2px apart)
     await chrome.action.setBadgeText({ text: '\u0964\u0964' });
     await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLORS.PAUSE_BG });
     if (chrome.action.setBadgeTextColor) {
@@ -87,41 +165,106 @@ async function updateToolbarBadge(tabId, state) {
 }
 
 /**
- * Refresh badge using the most relevant tab state
+ * Verify a tab still exists and points to a configured Plex URL
  */
-async function refreshGlobalBadge() {
-  const bestTab = await discoverBestPlexTab();
-  if (!bestTab) {
-    await chrome.action.setBadgeText({ text: '' });
-    await chrome.action.setTitle({ title: 'Playkeys (No Plex tab open)' });
-    return;
+async function getValidPlexTab(tabId) {
+  if (!tabId) return null;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab && (await isConfiguredPlexUrl(tab.url))) {
+      return tab;
+    }
+  } catch {
+    // Tab closed
   }
-
-  const state = tabStates.get(bestTab.id);
-  if (state) {
-    await updateToolbarBadge(bestTab.id, state);
-  } else {
-    await chrome.action.setBadgeText({ text: '' });
-    await chrome.action.setTitle({ title: 'Playkeys' });
+  tabStates.delete(tabId);
+  if (lastActivePlexTabId === tabId) {
+    lastActivePlexTabId = null;
   }
+  return null;
 }
 
 /**
- * Ensure content scripts are running in the target Plex tab
+ * Pick the highest-priority tab from cached tabStates without probing all browser tabs
+ */
+async function findBestCachedPlexTab() {
+  await ensureSessionLoaded();
+
+  const orderedIds = Array.from(tabStates.keys());
+  if (lastActivePlexTabId && tabStates.has(lastActivePlexTabId)) {
+    orderedIds.sort((a, b) => (a === lastActivePlexTabId ? -1 : b === lastActivePlexTabId ? 1 : 0));
+  }
+
+  // Priority 1: Playing tab
+  for (const tabId of orderedIds) {
+    const state = tabStates.get(tabId);
+    if (state?.isPlaying) {
+      const tab = await getValidPlexTab(tabId);
+      if (tab) return tab;
+    }
+  }
+
+  // Priority 2: Paused tab with active media
+  for (const tabId of orderedIds) {
+    const state = tabStates.get(tabId);
+    if (state?.hasMedia) {
+      const tab = await getValidPlexTab(tabId);
+      if (tab) return tab;
+    }
+  }
+
+  // Priority 3: Last active Plex tab
+  if (lastActivePlexTabId) {
+    const tab = await getValidPlexTab(lastActivePlexTabId);
+    if (tab) return tab;
+  }
+
+  return null;
+}
+
+/**
+ * Refresh the global toolbar badge using the highest-priority active Plex tab
+ */
+async function refreshGlobalBadge() {
+  return enqueueBadgeUpdate(async () => {
+    const bestTab = await findBestCachedPlexTab();
+    if (bestTab) {
+      const state = tabStates.get(bestTab.id) || null;
+      await applyToolbarBadge(state, 'Playkeys (Idle)');
+      return;
+    }
+
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (await isConfiguredPlexUrl(tab.url)) {
+        await applyToolbarBadge(tabStates.get(tab.id) || null, 'Playkeys');
+        return;
+      }
+    }
+
+    await applyToolbarBadge(null, 'Playkeys (No Plex tab open)');
+  });
+}
+
+/**
+ * Ensure both main-world bridge and isolated content script are running in the target tab
  */
 async function ensureScriptsInjected(tabId) {
   try {
-    // Test if content script responds
     await chrome.tabs.sendMessage(tabId, { action: 'getState' });
   } catch {
-    // If not responding, inject main bridge and content script
     try {
       await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        files: ['content/content.js']
+        target: { tabId },
+        files: ['content/main-bridge.js'],
+        world: 'MAIN'
       });
-      // Short delay for initialization
-      await new Promise(r => setTimeout(r, 120));
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content/content.js'],
+        world: 'ISOLATED'
+      });
+      await new Promise((r) => setTimeout(r, 120));
     } catch (err) {
       console.warn('[Playkeys Background] Auto-inject notice for tab', tabId, err.message);
     }
@@ -129,13 +272,13 @@ async function ensureScriptsInjected(tabId) {
 }
 
 /**
- * Inject content script into all currently open Plex tabs (e.g. after extension install/reload)
+ * Inject content scripts into all currently open authorized Plex tabs
  */
 async function injectIntoAllOpenPlexTabs() {
   try {
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
-      if (tab.id && (await isPlexUrl(tab.url))) {
+      if (tab.id && (await isConfiguredPlexUrl(tab.url))) {
         await ensureScriptsInjected(tab.id);
       }
     }
@@ -145,45 +288,45 @@ async function injectIntoAllOpenPlexTabs() {
 }
 
 /**
- * Tab Discovery: Find the most appropriate Plex tab
+ * Tab Discovery: Find the most appropriate authorized Plex tab
  * 1. Currently playing tab
- * 2. Tab with active media/metadata
+ * 2. Tab with active/paused media
  * 3. Most recently active Plex tab
- * 4. Any open Plex tab
+ * 4. Probe open Plex tabs to pick active playback or most recent open tab
  */
 async function discoverBestPlexTab() {
-  // 1. Check tabs currently playing
-  for (const [tabId, state] of tabStates.entries()) {
-    if (state.isPlaying) {
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        if (tab) return tab;
-      } catch {
-        tabStates.delete(tabId);
-      }
-    }
-  }
+  const cachedBest = await findBestCachedPlexTab();
+  if (cachedBest) return cachedBest;
 
-  // 2. Check last active Plex tab
-  if (lastActivePlexTabId) {
-    try {
-      const tab = await chrome.tabs.get(lastActivePlexTabId);
-      if (tab) return tab;
-    } catch {
-      lastActivePlexTabId = null;
-    }
-  }
-
-  // 3. Query all open tabs and find matching Plex tabs
   const tabs = await chrome.tabs.query({});
+  const plexTabs = [];
   for (const tab of tabs) {
-    if (await isPlexUrl(tab.url)) {
-      await ensureScriptsInjected(tab.id);
-      return tab;
+    if (tab.id && (await isConfiguredPlexUrl(tab.url))) {
+      plexTabs.push(tab);
     }
   }
 
-  return null;
+  if (plexTabs.length === 0) return null;
+
+  // Probe tabs to rebuild state when service worker woke cold
+  for (const tab of plexTabs) {
+    await ensureScriptsInjected(tab.id);
+    try {
+      const state = await chrome.tabs.sendMessage(tab.id, { action: 'getState' });
+      if (state) {
+        tabStates.set(tab.id, state);
+      }
+    } catch {
+      // Ignore unready tab
+    }
+  }
+  await persistSessionState();
+
+  const probedBest = await findBestCachedPlexTab();
+  if (probedBest) return probedBest;
+
+  // Fallback: prefer an active tab in its window, otherwise first open Plex tab
+  return plexTabs.find((t) => t.active) || plexTabs[0];
 }
 
 /**
@@ -216,11 +359,10 @@ async function dispatchPlayerAction(actionName, value = null) {
   await ensureScriptsInjected(tab.id);
 
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, {
+    return await chrome.tabs.sendMessage(tab.id, {
       action: actionName,
-      value: value
+      value
     });
-    return response;
   } catch (err) {
     console.warn('[Playkeys Background] Action dispatch failed:', err);
     return { success: false, error: err.message };
@@ -231,8 +373,6 @@ async function dispatchPlayerAction(actionName, value = null) {
  * Global Keyboard Shortcuts Router (chrome.commands)
  */
 chrome.commands.onCommand.addListener(async (command) => {
-  console.log('[Playkeys Background] Command received:', command);
-
   switch (command) {
     case 'play_pause':
       await dispatchPlayerAction('playPause');
@@ -261,7 +401,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 /**
- * Message Listener: Synchronize state updates, handle popup requests
+ * Message Listener: Synchronize state updates, handle popup & options requests
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) return;
@@ -270,39 +410,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (message.type) {
     case 'PLEX_STATE_UPDATE': {
-      if (tabId) {
-        tabStates.set(tabId, message.state);
-        lastActivePlexTabId = tabId;
-        updateToolbarBadge(tabId, message.state);
-      }
-      sendResponse({ received: true });
-      break;
+      (async () => {
+        await ensureSessionLoaded();
+        if (tabId) {
+          tabStates.set(tabId, message.state);
+          const anotherTabPlaying = Array.from(tabStates.entries()).some(
+            ([id, st]) => id !== tabId && st?.isPlaying
+          );
+          if (message.state?.isPlaying || message.state?.hasMedia || !anotherTabPlaying) {
+            lastActivePlexTabId = tabId;
+          }
+          await persistSessionState();
+          await refreshGlobalBadge();
+        }
+        sendResponse({ received: true });
+      })();
+      return true;
     }
 
     case 'PLEX_TAB_CLOSING': {
-      if (tabId) {
-        tabStates.delete(tabId);
-        if (lastActivePlexTabId === tabId) {
-          lastActivePlexTabId = null;
+      (async () => {
+        await ensureSessionLoaded();
+        if (tabId) {
+          tabStates.delete(tabId);
+          if (lastActivePlexTabId === tabId) {
+            lastActivePlexTabId = null;
+          }
+          await persistSessionState();
+          await refreshGlobalBadge();
         }
-      }
-      refreshGlobalBadge();
-      sendResponse({ received: true });
-      break;
+        sendResponse({ received: true });
+      })();
+      return true;
     }
 
     case 'GET_ACTIVE_PLEX_TAB': {
       (async () => {
         const tab = await discoverBestPlexTab();
         if (!tab) {
-          // Check if there are any un-granted Plex servers open in tabs (e.g. localhost:32400)
           const allTabs = await chrome.tabs.query({});
-          const unconfiguredPlexTab = allTabs.find(t => t.url && (t.url.includes(':32400') || t.url.includes('/web/index.html')));
+          let unconfiguredPlexTab = null;
+          for (const t of allTabs) {
+            if (t.url && isLikelyUnconfiguredPlexUrl(t.url) && !(await isConfiguredPlexUrl(t.url))) {
+              unconfiguredPlexTab = t;
+              break;
+            }
+          }
 
           sendResponse({
             tab: null,
             state: null,
-            unconfiguredTab: unconfiguredPlexTab ? { id: unconfiguredPlexTab.id, url: unconfiguredPlexTab.url } : null
+            unconfiguredTab: unconfiguredPlexTab
+              ? { id: unconfiguredPlexTab.id, url: unconfiguredPlexTab.url }
+              : null
           });
           return;
         }
@@ -311,7 +471,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!state) {
           try {
             state = await chrome.tabs.sendMessage(tab.id, { action: 'getState' });
-            if (state) tabStates.set(tab.id, state);
+            if (state) {
+              tabStates.set(tab.id, state);
+              await persistSessionState();
+            }
           } catch {
             // Script initializing
           }
@@ -319,7 +482,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         sendResponse({ tab: { id: tab.id, title: tab.title, url: tab.url }, state });
       })();
-      return true; // Keep message channel open for async response
+      return true;
     }
 
     case 'EXECUTE_PLAYER_ACTION': {
@@ -347,6 +510,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       (async () => {
         await updateDynamicContentScripts();
         await injectIntoAllOpenPlexTabs();
+        await refreshGlobalBadge();
         sendResponse({ success: true });
       })();
       return true;
@@ -355,26 +519,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * Register dynamic content script for granted custom origins
+ * Register dynamic MAIN and ISOLATED content scripts for granted custom origins
  */
 async function updateDynamicContentScripts() {
-  const customOrigins = await getConfiguredCustomOrigins();
+  const customOrigins = await getGrantedCustomOrigins();
   if (!chrome.scripting || !chrome.scripting.registerContentScripts) {
     return;
   }
 
   try {
-    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [DYNAMIC_SCRIPT_ID] });
+    const idsToCheck = [DYNAMIC_SCRIPT_MAIN_ID, DYNAMIC_SCRIPT_ISOLATED_ID, LEGACY_DYNAMIC_SCRIPT_ID];
+    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: idsToCheck });
     if (existing && existing.length > 0) {
-      await chrome.scripting.unregisterContentScripts({ ids: [DYNAMIC_SCRIPT_ID] });
+      await chrome.scripting.unregisterContentScripts({
+        ids: existing.map((item) => item.id)
+      });
     }
 
     if (customOrigins.length > 0) {
       await chrome.scripting.registerContentScripts([
         {
-          id: DYNAMIC_SCRIPT_ID,
+          id: DYNAMIC_SCRIPT_MAIN_ID,
+          matches: customOrigins,
+          js: ['content/main-bridge.js'],
+          world: 'MAIN',
+          runAt: 'document_start'
+        },
+        {
+          id: DYNAMIC_SCRIPT_ISOLATED_ID,
           matches: customOrigins,
           js: ['content/content.js'],
+          world: 'ISOLATED',
           runAt: 'document_idle'
         }
       ]);
@@ -386,31 +561,41 @@ async function updateDynamicContentScripts() {
 }
 
 /**
- * Tab cleanup listeners
+ * Tab cleanup and navigation listeners
  */
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabStates.has(tabId)) {
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await ensureSessionLoaded();
+  if (tabStates.has(tabId) || lastActivePlexTabId === tabId) {
     tabStates.delete(tabId);
     if (lastActivePlexTabId === tabId) {
       lastActivePlexTabId = null;
     }
-    refreshGlobalBadge();
+    await persistSessionState();
+    await refreshGlobalBadge();
   }
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  await ensureSessionLoaded();
+
   if (changeInfo.url) {
-    const isPlex = await isPlexUrl(changeInfo.url);
+    const isPlex = await isConfiguredPlexUrl(changeInfo.url);
     if (!isPlex && tabStates.has(tabId)) {
       tabStates.delete(tabId);
-      refreshGlobalBadge();
-    } else if (isPlex && changeInfo.status === 'complete') {
-      await ensureScriptsInjected(tabId);
+      if (lastActivePlexTabId === tabId) {
+        lastActivePlexTabId = null;
+      }
+      await persistSessionState();
+      await refreshGlobalBadge();
     }
+  }
+
+  if (changeInfo.status === 'complete' && tab?.url && (await isConfiguredPlexUrl(tab.url))) {
+    await ensureScriptsInjected(tabId);
   }
 });
 
-// Initialization on startup / install
+// Initialization on install / browser startup
 chrome.runtime.onInstalled.addListener(async () => {
   console.log('[Playkeys Background] Installed / Updated');
   await updateDynamicContentScripts();

@@ -4,6 +4,8 @@
  * quick server authorization, and player control dispatching.
  */
 
+import { normalizeServerInput, saveCustomServer } from '../shared/servers.js';
+
 document.addEventListener('DOMContentLoaded', () => {
   // DOM References
   const playerCard = document.getElementById('playerCard');
@@ -55,7 +57,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentState = null;
   let detectedTab = null;
   let isUserScrubbing = false;
-  let pollInterval = null;
+  let isUserAdjustingVolume = false;
+  let lastVolumeSendAt = 0;
+  let pendingVolumeTimer = null;
+  let lastArtworkUrl = '';
 
   /**
    * Format seconds to m:ss or h:mm:ss
@@ -83,6 +88,31 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
+   * Update artwork only when URL changes to avoid flicker/repeated loads
+   */
+  function updateArtwork(artworkUrl) {
+    const nextUrl = artworkUrl || '';
+    if (!nextUrl) {
+      lastArtworkUrl = '';
+      trackArtwork.removeAttribute('src');
+      showArtworkPlaceholder();
+      return;
+    }
+
+    if (nextUrl === lastArtworkUrl) return;
+    lastArtworkUrl = nextUrl;
+
+    trackArtwork.onload = () => {
+      trackArtwork.classList.remove('hidden');
+      artworkPlaceholder.classList.add('hidden');
+    };
+    trackArtwork.onerror = () => {
+      showArtworkPlaceholder();
+    };
+    trackArtwork.src = nextUrl;
+  }
+
+  /**
    * Render state into UI
    */
   function renderState(tab, state, unconfigured) {
@@ -104,7 +134,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (!tab) {
-      // Show empty state
       playerCard.classList.add('hidden');
       emptyState.classList.remove('hidden');
       focusTabBtn.classList.add('hidden');
@@ -114,7 +143,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Tab is available
     playerCard.classList.remove('hidden');
     emptyState.classList.add('hidden');
     focusTabBtn.classList.remove('hidden');
@@ -134,30 +162,16 @@ document.addEventListener('DOMContentLoaded', () => {
       trackTitle.textContent = 'Plex Connected';
       trackArtist.textContent = 'Waiting for media to play...';
       trackAlbum.textContent = '';
-      showArtworkPlaceholder();
+      updateArtwork('');
       return;
     }
 
-    // Update Metadata
     trackTitle.textContent = state.title || (state.hasMedia ? 'Plex Playback' : 'Idle');
     trackArtist.textContent = state.artist || (state.isPlaying ? 'Now Playing' : 'Plex Player');
     trackAlbum.textContent = state.album || '';
 
-    // Artwork
-    if (state.artworkUrl) {
-      trackArtwork.src = state.artworkUrl;
-      trackArtwork.onload = () => {
-        trackArtwork.classList.remove('hidden');
-        artworkPlaceholder.classList.add('hidden');
-      };
-      trackArtwork.onerror = () => {
-        showArtworkPlaceholder();
-      };
-    } else {
-      showArtworkPlaceholder();
-    }
+    updateArtwork(state.artworkUrl);
 
-    // Play / Pause Icon
     if (state.isPlaying) {
       iconPlay.classList.add('hidden');
       iconPause.classList.remove('hidden');
@@ -168,7 +182,6 @@ document.addEventListener('DOMContentLoaded', () => {
       btnPlayPause.title = 'Play (MediaPlayPause)';
     }
 
-    // Timeline
     const curTime = state.currentTime || 0;
     const dur = state.duration || 0;
 
@@ -186,14 +199,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Shuffle state
     if (state.isShuffle) {
       btnShuffle.classList.add('active');
     } else {
       btnShuffle.classList.remove('active');
     }
 
-    // Repeat state
     if (state.repeatMode === 'one') {
       btnRepeat.classList.add('active');
       repeatBadge.classList.remove('hidden');
@@ -206,22 +217,23 @@ document.addEventListener('DOMContentLoaded', () => {
       repeatBadge.classList.add('hidden');
     }
 
-    // Volume state
-    const volPercent = Math.round((state.volume ?? 1) * 100);
-    const isMuted = !!state.isMuted || volPercent === 0;
+    if (!isUserAdjustingVolume) {
+      const volPercent = Math.round((state.volume ?? 1) * 100);
+      const isMuted = !!state.isMuted || volPercent === 0;
 
-    if (isMuted) {
-      iconVolHigh.classList.add('hidden');
-      iconVolMuted.classList.remove('hidden');
-      volumeSlider.value = 0;
-      volumePercent.textContent = '0%';
-      updateSliderFill(volumeSlider, 0);
-    } else {
-      iconVolHigh.classList.remove('hidden');
-      iconVolMuted.classList.add('hidden');
-      volumeSlider.value = volPercent;
-      volumePercent.textContent = `${volPercent}%`;
-      updateSliderFill(volumeSlider, volPercent);
+      if (isMuted) {
+        iconVolHigh.classList.add('hidden');
+        iconVolMuted.classList.remove('hidden');
+        volumeSlider.value = 0;
+        volumePercent.textContent = '0%';
+        updateSliderFill(volumeSlider, 0);
+      } else {
+        iconVolHigh.classList.remove('hidden');
+        iconVolMuted.classList.add('hidden');
+        volumeSlider.value = volPercent;
+        volumePercent.textContent = `${volPercent}%`;
+        updateSliderFill(volumeSlider, volPercent);
+      }
     }
   }
 
@@ -235,14 +247,14 @@ document.addEventListener('DOMContentLoaded', () => {
    */
   async function sendPlayerAction(action, value = null) {
     try {
-      const response = await chrome.runtime.sendMessage({
+      return await chrome.runtime.sendMessage({
         type: 'EXECUTE_PLAYER_ACTION',
-        action: action,
-        value: value
+        action,
+        value
       });
-      return response;
     } catch (err) {
       console.warn('[Playkeys Popup] Action send error:', err);
+      return null;
     }
   }
 
@@ -278,7 +290,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Commit seek when pointer/mouse is released anywhere on the window
   const endScrubbing = async () => {
     if (isUserScrubbing) {
       isUserScrubbing = false;
@@ -295,63 +306,87 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('touchend', endScrubbing);
 
   // Handle Controls Click Events
+  async function dispatchAndRefresh(action, delayMs = 180) {
+    await sendPlayerAction(action);
+    setTimeout(refreshActiveTab, delayMs);
+  }
+
   btnPlayPause.addEventListener('click', async () => {
-    // Optimistic toggle
     if (currentState) {
       currentState.isPlaying = !currentState.isPlaying;
       currentState.isPaused = !currentState.isPlaying;
       renderState(activeTab, currentState, detectedTab);
     }
-    await sendPlayerAction('playPause');
+    await dispatchAndRefresh('playPause', 160);
   });
 
-  btnNext.addEventListener('click', () => sendPlayerAction('next'));
-  btnPrev.addEventListener('click', () => sendPlayerAction('previous'));
-  btnShuffle.addEventListener('click', () => sendPlayerAction('toggleShuffle'));
-  btnRepeat.addEventListener('click', () => sendPlayerAction('toggleRepeat'));
+  btnNext.addEventListener('click', () => dispatchAndRefresh('next', 250));
+  btnPrev.addEventListener('click', () => dispatchAndRefresh('previous', 250));
+  btnShuffle.addEventListener('click', () => dispatchAndRefresh('toggleShuffle', 200));
+  btnRepeat.addEventListener('click', () => dispatchAndRefresh('toggleRepeat', 200));
+  btnMute.addEventListener('click', () => dispatchAndRefresh('toggleMute', 150));
 
-  // Volume Slider
+  // Throttled Volume Slider with drag guard
+  function scheduleVolumeSend(val) {
+    const now = Date.now();
+    const elapsed = now - lastVolumeSendAt;
+    if (elapsed >= 50) {
+      lastVolumeSendAt = now;
+      sendPlayerAction('setVolume', val / 100);
+    } else {
+      clearTimeout(pendingVolumeTimer);
+      pendingVolumeTimer = setTimeout(() => {
+        lastVolumeSendAt = Date.now();
+        sendPlayerAction('setVolume', val / 100);
+      }, 50 - elapsed);
+    }
+  }
+
+  volumeSlider.addEventListener('pointerdown', () => {
+    isUserAdjustingVolume = true;
+  });
+
   volumeSlider.addEventListener('input', () => {
+    isUserAdjustingVolume = true;
     const val = parseInt(volumeSlider.value, 10);
     volumePercent.textContent = `${val}%`;
     updateSliderFill(volumeSlider, val);
-    sendPlayerAction('setVolume', val / 100);
+    if (val === 0) {
+      iconVolHigh.classList.add('hidden');
+      iconVolMuted.classList.remove('hidden');
+    } else {
+      iconVolHigh.classList.remove('hidden');
+      iconVolMuted.classList.add('hidden');
+    }
+    scheduleVolumeSend(val);
   });
 
-  btnMute.addEventListener('click', () => sendPlayerAction('toggleMute'));
+  const endVolumeAdjust = () => {
+    if (isUserAdjustingVolume) {
+      isUserAdjustingVolume = false;
+      clearTimeout(pendingVolumeTimer);
+      const val = parseInt(volumeSlider.value, 10);
+      sendPlayerAction('setVolume', val / 100);
+    }
+  };
+
+  window.addEventListener('pointerup', endVolumeAdjust);
+  window.addEventListener('mouseup', endVolumeAdjust);
+  window.addEventListener('touchend', endVolumeAdjust);
 
   // Quick One-Click Connect for Detected Local Server
   btnGrantDetected.addEventListener('click', async () => {
     if (!detectedTab || !detectedTab.url) return;
 
     try {
-      const parsed = new URL(detectedTab.url);
-      const pattern = `${parsed.protocol}//${parsed.hostname}/*`;
-
+      const normalized = normalizeServerInput(detectedTab.url);
       const granted = await chrome.permissions.request({
-        origins: [pattern]
+        origins: [normalized.pattern]
       });
 
       if (granted) {
-        const data = await chrome.storage.sync.get({ customServers: [], customOrigins: [] });
-        const servers = data.customServers || [];
-        const origins = data.customOrigins || [];
-
-        if (!origins.includes(pattern)) {
-          origins.push(pattern);
-          servers.push({
-            id: 'srv_' + Date.now(),
-            pattern: pattern,
-            displayName: parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname,
-            displayUrl: parsed.origin,
-            name: `Plex Server (${parsed.hostname})`,
-            addedAt: Date.now()
-          });
-
-          await chrome.storage.sync.set({ customServers: servers, customOrigins: origins });
-          await chrome.runtime.sendMessage({ type: 'SYNC_CUSTOM_ORIGINS' });
-        }
-
+        await saveCustomServer(normalized);
+        await chrome.runtime.sendMessage({ type: 'SYNC_CUSTOM_ORIGINS' });
         unconfiguredBanner.classList.add('hidden');
         await refreshActiveTab();
       }
@@ -375,15 +410,19 @@ document.addEventListener('DOMContentLoaded', () => {
     window.close();
   });
 
-  // Real-time state listener from background
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message && message.type === 'PLEX_STATE_UPDATE') {
+  // Real-time state listener from content scripts
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (!message || message.type !== 'PLEX_STATE_UPDATE') return;
+
+    if (sender.tab && activeTab && sender.tab.id === activeTab.id && message.state) {
+      renderState(activeTab, message.state, detectedTab);
+    } else {
       refreshActiveTab();
     }
   });
 
   // Polling to keep time smooth while popup is visible
-  pollInterval = setInterval(refreshActiveTab, 1000);
+  setInterval(refreshActiveTab, 1000);
 
   // Initial fetch
   refreshActiveTab();

@@ -15,22 +15,37 @@
   let bridgeMetadata = null;
   let lastBroadcastState = null;
   let attachedMediaElement = null;
+  let attachedMediaHandler = null;
   let heartbeatTimer = null;
+  let mutationDebounceTimer = null;
+  let domObserver = null;
+
+  const MEDIA_EVENTS = ['play', 'pause', 'timeupdate', 'volumechange', 'ended', 'loadedmetadata', 'seeked'];
 
   /**
-   * Inject main-bridge.js into the page context if not already loaded via manifest
+   * Check whether the extension runtime context is still valid
    */
-  function ensureMainBridgeInjected() {
-    if (document.getElementById('playkeys-bridge-script')) return;
-    try {
-      const script = document.createElement('script');
-      script.id = 'playkeys-bridge-script';
-      script.src = chrome.runtime.getURL('content/main-bridge.js');
-      script.onload = () => script.remove();
-      (document.head || document.documentElement).appendChild(script);
-    } catch {
-      // Safe fallback if extension context prevents script tag injection
+  function isExtensionContextValid() {
+    return typeof chrome !== 'undefined' && Boolean(chrome.runtime && chrome.runtime.id);
+  }
+
+  /**
+   * Tear down timers, observers, and media listeners if extension reloads/unloads
+   */
+  function teardown() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
     }
+    if (mutationDebounceTimer) {
+      clearTimeout(mutationDebounceTimer);
+      mutationDebounceTimer = null;
+    }
+    if (domObserver) {
+      domObserver.disconnect();
+      domObserver = null;
+    }
+    detachMediaListeners();
   }
 
   /**
@@ -41,8 +56,8 @@
       return;
     }
 
-    if (event.data.type === 'METADATA_UPDATE' && event.data.data) {
-      bridgeMetadata = event.data.data;
+    if (event.data.type === 'METADATA_UPDATE') {
+      bridgeMetadata = event.data.data || null;
       broadcastState(true);
     }
   });
@@ -52,7 +67,12 @@
    */
   function dispatchToBridge(action, value = null) {
     return new Promise((resolve) => {
-      const requestId = 'req_' + Math.random().toString(36).substr(2, 9);
+      const requestId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'req_' + Math.random().toString(36).slice(2, 11);
+
+      let timeoutId = null;
 
       const responseHandler = (event) => {
         if (
@@ -62,6 +82,7 @@
           event.data.type === 'ACTION_RESPONSE' &&
           event.data.requestId === requestId
         ) {
+          clearTimeout(timeoutId);
           window.removeEventListener('message', responseHandler);
           resolve(event.data.handled);
         }
@@ -72,15 +93,14 @@
       window.postMessage(
         {
           source: 'PLAYKEYS_CONTENT_SCRIPT',
-          action: action,
-          value: value,
-          requestId: requestId
+          action,
+          value,
+          requestId
         },
         '*'
       );
 
-      // Timeout fallback in case bridge is not loaded yet
-      setTimeout(() => {
+      timeoutId = setTimeout(() => {
         window.removeEventListener('message', responseHandler);
         resolve(false);
       }, 150);
@@ -198,13 +218,12 @@
       try {
         const matches = Array.from(document.querySelectorAll(sel));
         for (const el of matches) {
-          // Verify visibility
           if (el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0)) {
             return el;
           }
         }
       } catch {
-        // Ignore invalid selector in older browsers
+        // Ignore unsupported selector
       }
     }
     return null;
@@ -394,12 +413,16 @@
       }
     }
 
-    const hasMedia = !!(media || meta.title || isPlaying);
+    const hasMedia = !!(
+      (media && (media.currentSrc || media.src || media.readyState > 0 || media.duration > 0)) ||
+      meta.title ||
+      isPlaying
+    );
 
     return {
       hasMedia,
       isPlaying,
-      isPaused: !isPlaying,
+      isPaused,
       currentTime,
       duration,
       volume,
@@ -419,15 +442,26 @@
    * Broadcast state to background worker and popup
    */
   function broadcastState(forced = false) {
+    if (!isExtensionContextValid()) {
+      teardown();
+      return;
+    }
+
     const state = getPlayerState();
 
     if (
       !forced &&
       lastBroadcastState &&
+      lastBroadcastState.hasMedia === state.hasMedia &&
       lastBroadcastState.isPlaying === state.isPlaying &&
       lastBroadcastState.isPaused === state.isPaused &&
       lastBroadcastState.title === state.title &&
       lastBroadcastState.artist === state.artist &&
+      lastBroadcastState.album === state.album &&
+      lastBroadcastState.artworkUrl === state.artworkUrl &&
+      lastBroadcastState.isShuffle === state.isShuffle &&
+      lastBroadcastState.repeatMode === state.repeatMode &&
+      lastBroadcastState.duration === state.duration &&
       Math.abs(lastBroadcastState.currentTime - state.currentTime) < 0.9 &&
       lastBroadcastState.isMuted === state.isMuted &&
       lastBroadcastState.volume === state.volume
@@ -438,29 +472,54 @@
     lastBroadcastState = state;
 
     try {
-      chrome.runtime.sendMessage({
-        type: 'PLEX_STATE_UPDATE',
-        state: state
-      }).catch(() => {
-        // Background worker asleep; safe to ignore
-      });
+      chrome.runtime
+        .sendMessage({
+          type: 'PLEX_STATE_UPDATE',
+          state
+        })
+        .catch(() => {
+          // Background worker asleep; safe to ignore
+        });
     } catch {
-      // Extension context invalidated
+      teardown();
     }
+  }
+
+  /**
+   * Detach listeners from previously attached media element
+   */
+  function detachMediaListeners() {
+    if (attachedMediaElement && attachedMediaHandler) {
+      MEDIA_EVENTS.forEach((evt) => attachedMediaElement.removeEventListener(evt, attachedMediaHandler));
+    }
+    attachedMediaElement = null;
+    attachedMediaHandler = null;
   }
 
   /**
    * Attach listeners to an HTML5 media element
    */
   function attachMediaListeners(media) {
-    if (!media || media === attachedMediaElement) return;
+    if (media === attachedMediaElement) return;
+    detachMediaListeners();
+    if (!media) return;
 
-    const events = ['play', 'pause', 'timeupdate', 'volumechange', 'ended', 'loadedmetadata', 'seeked'];
-    const handler = () => broadcastState();
-
-    events.forEach((evt) => media.addEventListener(evt, handler, { passive: true }));
+    attachedMediaHandler = () => broadcastState();
+    MEDIA_EVENTS.forEach((evt) => media.addEventListener(evt, attachedMediaHandler, { passive: true }));
     attachedMediaElement = media;
     broadcastState(true);
+  }
+
+  /**
+   * Set an input element's value in a React-compatible way
+   */
+  function setNativeInputValue(input, value) {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (descriptor && typeof descriptor.set === 'function') {
+      descriptor.set.call(input, value);
+    } else {
+      input.value = value;
+    }
   }
 
   /**
@@ -479,7 +538,9 @@
       const media = findActiveMediaElement();
       const isCurrentlyPlaying = media ? !media.paused : false;
 
-      const targetBtn = isCurrentlyPlaying ? (findButton('pause') || findButton('playPause')) : (findButton('play') || findButton('playPause'));
+      const targetBtn = isCurrentlyPlaying
+        ? findButton('pause') || findButton('playPause')
+        : findButton('play') || findButton('playPause');
       if (targetBtn && simulateClick(targetBtn)) {
         setTimeout(() => broadcastState(true), 150);
         return { success: true, method: 'ui-button' };
@@ -544,14 +605,12 @@
     },
 
     async next() {
-      // 1. Try Main-World MediaSession bridge
       const handled = await dispatchToBridge('next');
       if (handled) {
         setTimeout(() => broadcastState(true), 250);
         return { success: true, method: 'bridge-next' };
       }
 
-      // 2. Try UI Button in Plex DOM
       const btn = findButton('next');
       if (btn && simulateClick(btn)) {
         setTimeout(() => broadcastState(true), 250);
@@ -562,21 +621,18 @@
     },
 
     async previous() {
-      // 1. Try Main-World MediaSession bridge
       const handled = await dispatchToBridge('previous');
       if (handled) {
         setTimeout(() => broadcastState(true), 250);
         return { success: true, method: 'bridge-prev' };
       }
 
-      // 2. Try UI Button in Plex DOM
       const btn = findButton('previous');
       if (btn && simulateClick(btn)) {
         setTimeout(() => broadcastState(true), 250);
         return { success: true, method: 'ui-button' };
       }
 
-      // 3. Fallback: Rewind media if > 3s
       const media = findActiveMediaElement();
       if (media && media.currentTime > 3) {
         media.currentTime = 0;
@@ -654,10 +710,13 @@
         if (target > 0 && media.muted) media.muted = false;
       }
 
-      // Also dispatch to Plex's volume slider if present
-      const slider = document.querySelector('[data-testid="volumeSlider"] input, input[type="range"][aria-label*="volume" i], [class*="VolumeSlider"] input');
+      const slider = document.querySelector(
+        '[data-testid="volumeSlider"] input, input[type="range"][aria-label*="volume" i], [class*="VolumeSlider"] input'
+      );
       if (slider) {
-        slider.value = target * 100;
+        const maxVal = parseFloat(slider.max);
+        const scaled = maxVal > 0 && maxVal <= 1 ? target : Math.round(target * 100);
+        setNativeInputValue(slider, String(scaled));
         slider.dispatchEvent(new Event('input', { bubbles: true }));
         slider.dispatchEvent(new Event('change', { bubbles: true }));
       }
@@ -669,14 +728,12 @@
     async seek(seconds) {
       const target = Math.max(0, parseFloat(seconds) || 0);
 
-      // 1. Try bridge MediaSession seekto
       const handled = await dispatchToBridge('seek', target);
       if (handled) {
         setTimeout(() => broadcastState(true), 150);
         return { success: true };
       }
 
-      // 2. Direct HTML5 Media seek
       const media = findActiveMediaElement();
       if (media && isFinite(media.duration)) {
         media.currentTime = Math.min(media.duration, target);
@@ -725,34 +782,48 @@
       Promise.resolve(actions[request.action](request.value))
         .then((res) => sendResponse(res || { success: true }))
         .catch((err) => sendResponse({ success: false, error: err.message }));
-      return true; // Keep message port open for async response
-    } else {
-      sendResponse({ success: false, error: `Unknown action: ${request.action}` });
+      return true;
     }
+
+    sendResponse({ success: false, error: `Unknown action: ${request.action}` });
   });
 
   /**
-   * Observe DOM mutations for dynamically mounted media or control bars
+   * Observe DOM mutations (debounced) for dynamically mounted media or control bars
    */
   function setupDOMObserver() {
-    const observer = new MutationObserver(() => {
-      const media = findActiveMediaElement();
-      if (media && media !== attachedMediaElement) {
-        attachMediaListeners(media);
-      }
-      broadcastState();
+    const targetNode = document.body || document.documentElement;
+    if (!targetNode) return;
+
+    domObserver = new MutationObserver(() => {
+      if (mutationDebounceTimer) return;
+      mutationDebounceTimer = setTimeout(() => {
+        mutationDebounceTimer = null;
+        if (!isExtensionContextValid()) {
+          teardown();
+          return;
+        }
+        const media = findActiveMediaElement();
+        if (media !== attachedMediaElement) {
+          attachMediaListeners(media);
+        }
+        broadcastState();
+      }, 150);
     });
 
-    observer.observe(document.body, {
+    domObserver.observe(targetNode, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['class', 'aria-label', 'aria-checked', 'src', 'data-testid']
     });
 
-    // Periodic heartbeat (keeps seek slider and badges synchronized during playback)
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => {
+      if (!isExtensionContextValid()) {
+        teardown();
+        return;
+      }
       const media = findActiveMediaElement();
       if (media && !media.paused) {
         broadcastState();
@@ -760,18 +831,17 @@
     }, 1000);
   }
 
-  // Window unload listener to clear badges
-  window.addEventListener('beforeunload', () => {
+  // Page unload / navigation listener to clear badges without disabling BFCache
+  window.addEventListener('pagehide', () => {
+    if (!isExtensionContextValid()) return;
     try {
-      chrome.runtime.sendMessage({ type: 'PLEX_TAB_CLOSING' });
+      chrome.runtime.sendMessage({ type: 'PLEX_TAB_CLOSING' }).catch(() => {});
     } catch {
       // Ignore
     }
   });
 
   // Initialization
-  ensureMainBridgeInjected();
-
   const initMedia = findActiveMediaElement();
   if (initMedia) {
     attachMediaListeners(initMedia);

@@ -61,16 +61,6 @@
       "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "content/main-bridge.js"
-      ],
-      "matches": [
-        "<all_urls>"
-      ]
-    }
-  ],
   "commands": {
     "play_pause": {
       "suggested_key": {
@@ -105,24 +95,12 @@
       "global": true
     },
     "volume_up": {
-      "suggested_key": {
-        "default": "Alt+Shift+Up",
-        "mac": "Alt+Shift+Up"
-      },
       "description": "Volume up"
     },
     "volume_down": {
-      "suggested_key": {
-        "default": "Alt+Shift+Down",
-        "mac": "Alt+Shift+Down"
-      },
       "description": "Volume down"
     },
     "toggle_mute": {
-      "suggested_key": {
-        "default": "Alt+Shift+M",
-        "mac": "Alt+Shift+M"
-      },
       "description": "Toggle mute"
     }
   }

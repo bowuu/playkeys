@@ -33,6 +33,19 @@
   }
 
   /**
+   * Check if any media element on the page is actively playing
+   */
+  function hasPlayingMedia() {
+    const list = document.querySelectorAll('video, audio');
+    for (const m of list) {
+      if (!m.paused && !m.ended && (m.readyState > 1 || m.currentTime > 0)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Extract high-fidelity metadata from page-context MediaSession
    */
   function inspectPageMetadata() {
@@ -47,7 +60,7 @@
           title: meta.title || '',
           artist: meta.artist || '',
           album: meta.album || '',
-          artworkUrl: artworkUrl
+          artworkUrl
         };
       }
     } catch (err) {
@@ -57,11 +70,24 @@
   }
 
   /**
-   * Report metadata changes to the isolated content script
+   * Report metadata changes (including clearing to null) to the isolated content script
    */
   function checkAndBroadcastMetadata() {
     const meta = inspectPageMetadata();
-    if (!meta) return;
+    if (!meta) {
+      if (lastReportedMeta !== null) {
+        lastReportedMeta = null;
+        window.postMessage(
+          {
+            source: 'PLAYKEYS_PAGE_BRIDGE',
+            type: 'METADATA_UPDATE',
+            data: null
+          },
+          '*'
+        );
+      }
+      return;
+    }
 
     if (
       !lastReportedMeta ||
@@ -82,14 +108,23 @@
     }
   }
 
-  // Periodic metadata check (Plex updates mediaSession when tracks start/change)
+  // Periodic metadata check (Plex updates mediaSession when tracks start/change/stop)
   setInterval(checkAndBroadcastMetadata, 800);
+
+  /**
+   * Invoke a registered MediaSession action handler with standard details payload
+   */
+  function invokeHandler(actionName, extraDetails = {}) {
+    const handler = plexHandlers.get(actionName);
+    if (typeof handler !== 'function') return false;
+    handler({ action: actionName, ...extraDetails });
+    return true;
+  }
 
   /**
    * Listen for action dispatches from the isolated content script
    */
   window.addEventListener('message', (event) => {
-    // Only accept messages from the same window and from Playkeys content script
     if (event.source !== window || !event.data || event.data.source !== 'PLAYKEYS_CONTENT_SCRIPT') {
       return;
     }
@@ -101,66 +136,44 @@
     try {
       switch (action) {
         case 'playPause': {
-          // Check if pause handler is available and active media is playing
-          const media = document.querySelector('video, audio');
-          if (media && !media.paused && plexHandlers.has('pause')) {
-            plexHandlers.get('pause')();
-            handled = true;
-          } else if (plexHandlers.has('play')) {
-            plexHandlers.get('play')();
-            handled = true;
+          if (hasPlayingMedia()) {
+            handled = invokeHandler('pause');
+          } else {
+            handled = invokeHandler('play');
           }
           break;
         }
 
         case 'play': {
-          if (plexHandlers.has('play')) {
-            plexHandlers.get('play')();
-            handled = true;
-          }
+          handled = invokeHandler('play');
           break;
         }
 
         case 'pause': {
-          if (plexHandlers.has('pause')) {
-            plexHandlers.get('pause')();
-            handled = true;
-          }
+          handled = invokeHandler('pause');
           break;
         }
 
         case 'next': {
-          if (plexHandlers.has('nexttrack')) {
-            plexHandlers.get('nexttrack')();
-            handled = true;
-          }
+          handled = invokeHandler('nexttrack');
+          if (handled) setTimeout(checkAndBroadcastMetadata, 200);
           break;
         }
 
         case 'previous': {
-          if (plexHandlers.has('previoustrack')) {
-            plexHandlers.get('previoustrack')();
-            handled = true;
-          }
+          handled = invokeHandler('previoustrack');
+          if (handled) setTimeout(checkAndBroadcastMetadata, 200);
           break;
         }
 
         case 'stop': {
-          if (plexHandlers.has('stop')) {
-            plexHandlers.get('stop')();
-            handled = true;
-          } else if (plexHandlers.has('pause')) {
-            plexHandlers.get('pause')();
-            handled = true;
-          }
+          handled = invokeHandler('stop') || invokeHandler('pause');
+          if (handled) setTimeout(checkAndBroadcastMetadata, 150);
           break;
         }
 
         case 'seek': {
-          if (plexHandlers.has('seekto')) {
-            plexHandlers.get('seekto')({ seekTime: parseFloat(value) || 0 });
-            handled = true;
-          }
+          handled = invokeHandler('seekto', { seekTime: parseFloat(value) || 0 });
           break;
         }
 
@@ -174,14 +187,13 @@
       console.warn('[Playkeys Bridge] Action execution notice:', action, err);
     }
 
-    // Acknowledge back to content script
     window.postMessage(
       {
         source: 'PLAYKEYS_PAGE_BRIDGE',
         type: 'ACTION_RESPONSE',
-        requestId: requestId,
-        handled: handled,
-        result: result
+        requestId,
+        handled,
+        result
       },
       '*'
     );
