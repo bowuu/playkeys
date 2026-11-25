@@ -6,7 +6,7 @@
  */
 
 (() => {
-  const BRIDGE_VERSION = 3;
+  const BRIDGE_VERSION = 4;
 
   if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
@@ -260,10 +260,13 @@
     return false;
   }
 
+  let activeVolumeOpId = 0;
+
   /**
    * Set Plex Web's custom VerticalSlider / VolumeSlider value (0..1) so React state & persistence update
    */
-  function setPlexVolume(targetValue) {
+  async function setPlexVolume(targetValue) {
+    const opId = ++activeVolumeOpId;
     const target = Math.max(0, Math.min(1, parseFloat(targetValue) || 0));
     const targetPercent = Math.round(target * 100);
     const slider = document.querySelector(
@@ -271,100 +274,107 @@
     );
     if (!slider) return false;
 
-    const thumb = slider.querySelector('[role="slider"]');
-    const rect = slider.getBoundingClientRect();
-
-    if (rect.width > 0 && rect.height > 0) {
-      const isVertical =
-        slider.className.includes('VerticalSlider') || rect.height > rect.width;
-      const clientX = isVertical
-        ? rect.left + rect.width / 2
-        : rect.left + target * rect.width;
-      const clientY = isVertical
-        ? rect.bottom - target * rect.height
-        : rect.top + rect.height / 2;
-
-      const capturedPointers = new Set();
-      const origSetCapture = Element.prototype.setPointerCapture;
-      const origReleaseCapture = Element.prototype.releasePointerCapture;
-      const origHasCapture = Element.prototype.hasPointerCapture;
-
-      Element.prototype.setPointerCapture = function (id) {
-        capturedPointers.add(id);
-      };
-      Element.prototype.releasePointerCapture = function (id) {
-        capturedPointers.delete(id);
-      };
-      Element.prototype.hasPointerCapture = function (id) {
-        return capturedPointers.has(id) || origHasCapture.call(this, id);
-      };
-
-      try {
-        const ptrDown = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX,
-          clientY,
-          pointerId: 1,
-          pointerType: 'mouse',
-          isPrimary: true,
-          button: 0,
-          buttons: 1
-        };
-        const mouseDown = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX,
-          clientY,
-          button: 0,
-          buttons: 1
-        };
-        slider.dispatchEvent(new PointerEvent('pointerover', ptrDown));
-        slider.dispatchEvent(new PointerEvent('pointerenter', { ...ptrDown, bubbles: false }));
-        slider.dispatchEvent(new MouseEvent('mouseover', mouseDown));
-        slider.dispatchEvent(new MouseEvent('mouseenter', { ...mouseDown, bubbles: false }));
-        slider.dispatchEvent(new PointerEvent('pointerdown', ptrDown));
-        slider.dispatchEvent(new MouseEvent('mousedown', mouseDown));
-        slider.dispatchEvent(new PointerEvent('pointermove', ptrDown));
-        slider.dispatchEvent(new MouseEvent('mousemove', mouseDown));
-        slider.dispatchEvent(new PointerEvent('pointerup', { ...ptrDown, buttons: 0 }));
-        slider.dispatchEvent(new MouseEvent('mouseup', { ...mouseDown, buttons: 0 }));
-        slider.dispatchEvent(new MouseEvent('click', { ...mouseDown, buttons: 0 }));
-      } finally {
-        Element.prototype.setPointerCapture = origSetCapture;
-        Element.prototype.releasePointerCapture = origReleaseCapture;
-        Element.prototype.hasPointerCapture = origHasCapture;
-      }
-
-      if (thumb) {
-        const nowVal = parseInt(thumb.getAttribute('aria-valuenow'), 10);
-        if (Number.isFinite(nowVal) && Math.abs(nowVal - targetPercent) <= 2) {
-          return true;
-        }
+    if (target > 0) {
+      const volBtn = document.querySelector('button[class*="PlayerControls-volumeButton-"]');
+      if (volBtn && /unmute/i.test(volBtn.getAttribute('aria-label') || '')) {
+        volBtn.click();
       }
     }
 
-    // Fallback: invoke React fiber change handler on Plex's Slider component
-    const fiberKey = Object.keys(slider).find(
-      (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
-    );
-    let fiber = fiberKey ? slider[fiberKey] : null;
-    let steps = 0;
-    while (fiber && steps < 10) {
-      const props = fiber.memoizedProps || fiber.pendingProps;
-      if (props && typeof props.onChange === 'function') {
-        props.onChange(targetPercent);
-        if (typeof props.onChangeComplete === 'function') {
-          props.onChangeComplete(targetPercent);
-        } else if (typeof props.onAfterChange === 'function') {
-          props.onAfterChange(targetPercent);
-        }
+    const thumb = slider.querySelector('[role="slider"]');
+    const track = slider.querySelector('[class*="thumbTrack"]') || slider;
+    let rect = track.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      rect = slider.getBoundingClientRect();
+    }
+    if (rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+
+    const isVertical =
+      slider.className.includes('VerticalSlider') || rect.height > rect.width;
+    const clientX = isVertical
+      ? rect.left + rect.width / 2
+      : rect.left + target * rect.width;
+    let clientY = isVertical
+      ? rect.bottom - target * rect.height
+      : rect.top + rect.height / 2;
+
+    if (isVertical && target > 0 && target < 1 && rect.height > 2) {
+      clientY = Math.max(rect.top + 0.5, Math.min(rect.bottom - 0.5, clientY));
+    }
+
+    const capturedPointers = new Set();
+    const origSetCapture = Element.prototype.setPointerCapture;
+    const origReleaseCapture = Element.prototype.releasePointerCapture;
+    const origHasCapture = Element.prototype.hasPointerCapture;
+
+    Element.prototype.setPointerCapture = function (id) {
+      capturedPointers.add(id);
+    };
+    Element.prototype.releasePointerCapture = function (id) {
+      capturedPointers.delete(id);
+    };
+    Element.prototype.hasPointerCapture = function (id) {
+      return capturedPointers.has(id) || origHasCapture.call(this, id);
+    };
+
+    try {
+      const ptrDown = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons: 1
+      };
+      const mouseDown = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 0,
+        buttons: 1
+      };
+
+      slider.dispatchEvent(new PointerEvent('pointerover', ptrDown));
+      slider.dispatchEvent(new PointerEvent('pointerenter', { ...ptrDown, bubbles: false }));
+      slider.dispatchEvent(new MouseEvent('mouseover', mouseDown));
+      slider.dispatchEvent(new MouseEvent('mouseenter', { ...mouseDown, bubbles: false }));
+      slider.dispatchEvent(new PointerEvent('pointerdown', ptrDown));
+      slider.dispatchEvent(new MouseEvent('mousedown', mouseDown));
+
+      await new Promise((r) => setTimeout(r, 20));
+      if (opId !== activeVolumeOpId) {
         return true;
       }
-      fiber = fiber.return;
-      steps += 1;
+
+      slider.dispatchEvent(new PointerEvent('pointermove', ptrDown));
+      slider.dispatchEvent(new MouseEvent('mousemove', mouseDown));
+      slider.dispatchEvent(new PointerEvent('pointerup', { ...ptrDown, buttons: 0 }));
+      slider.dispatchEvent(new MouseEvent('mouseup', { ...mouseDown, buttons: 0 }));
+    } finally {
+      Element.prototype.setPointerCapture = origSetCapture;
+      Element.prototype.releasePointerCapture = origReleaseCapture;
+      Element.prototype.hasPointerCapture = origHasCapture;
+    }
+
+    await new Promise((r) => setTimeout(r, 25));
+
+    if (thumb) {
+      const nowVal = parseInt(thumb.getAttribute('aria-valuenow'), 10);
+      if (
+        Number.isFinite(nowVal) &&
+        !(targetPercent > 0 && nowVal === 0) &&
+        Math.abs(nowVal - targetPercent) <= 5
+      ) {
+        return true;
+      }
     }
 
     return false;
@@ -427,7 +437,7 @@
         }
 
         case 'setVolume': {
-          handled = setPlexVolume(value);
+          handled = await setPlexVolume(value);
           break;
         }
 
