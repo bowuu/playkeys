@@ -839,7 +839,7 @@
     },
 
     async playQueueItem(itemPayload) {
-      const res = await dispatchToBridgeWithResult('playQueueItem', itemPayload, 1800);
+      const res = await dispatchToBridgeWithResult('playQueueItem', itemPayload, 4000);
       if (res.handled) {
         setTimeout(() => broadcastState(true), 250);
         return { success: true, queue: res.result || bridgeQueue };

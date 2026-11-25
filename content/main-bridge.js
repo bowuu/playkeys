@@ -6,7 +6,7 @@
  */
 
 (() => {
-  const BRIDGE_VERSION = 7;
+  const BRIDGE_VERSION = 8;
 
   if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
@@ -618,6 +618,23 @@
     return document.querySelector('[class*="AudioVideoPlayQueue-content-"]');
   }
 
+  function findButtonByA11yLabel(pattern, scope = document) {
+    const buttons = scope.querySelectorAll('button');
+    for (const btn of buttons) {
+      const label = (
+        btn.getAttribute('aria-label') ||
+        btn.getAttribute('title') ||
+        btn.getAttribute('aria-description') ||
+        btn.textContent ||
+        ''
+      ).trim();
+      if (pattern.test(label)) {
+        return btn;
+      }
+    }
+    return null;
+  }
+
   function findPlayQueueButton() {
     const explicit = document.querySelector(
       'button[aria-label="Play Queue"], button[title="Play Queue"], button[aria-description="Play Queue"], button[class*="playQueue" i]'
@@ -625,14 +642,75 @@
     if (explicit) return explicit;
 
     const volBtn = document.querySelector('button[class*="PlayerControls-volumeButton-"]');
-    const prev = volBtn?.previousElementSibling;
-    return prev && prev.tagName === 'BUTTON' ? prev : null;
+    if (volBtn) {
+      const directPrev = volBtn.previousElementSibling;
+      if (directPrev && directPrev.tagName === 'BUTTON') return directPrev;
+      const wrapperPrev = volBtn.parentElement?.previousElementSibling;
+      if (wrapperPrev) {
+        if (wrapperPrev.tagName === 'BUTTON') return wrapperPrev;
+        const nestedBtn = wrapperPrev.querySelector('button');
+        if (nestedBtn) return nestedBtn;
+      }
+    }
+
+    const playerScope =
+      document.querySelector('[class*="PlayerContainer-"], [class*="PlayerControls-"]') || document;
+    return findButtonByA11yLabel(/^play queue$/i, playerScope);
   }
 
   function findMinimizePlayerButton() {
-    return document.querySelector(
+    const explicit = document.querySelector(
       'button[aria-label="Minimize Player"], button[title="Minimize Player"], button[aria-description="Minimize Player"], button[class*="minimize" i]'
     );
+    if (explicit) return explicit;
+
+    return findButtonByA11yLabel(/^minimize player$/i, document);
+  }
+
+  function dispatchRealClick(targetEl) {
+    if (!targetEl) return false;
+    const rect = targetEl.getBoundingClientRect();
+    const clientX = rect.width > 0 ? rect.left + rect.width / 2 : 0;
+    const clientY = rect.height > 0 ? rect.top + rect.height / 2 : 0;
+
+    const ptrInit = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX,
+      clientY,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+      button: 0,
+      buttons: 1
+    };
+    const mouseInit = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX,
+      clientY,
+      button: 0,
+      buttons: 1
+    };
+
+    targetEl.dispatchEvent(new PointerEvent('pointerover', ptrInit));
+    targetEl.dispatchEvent(new PointerEvent('pointerenter', { ...ptrInit, bubbles: false }));
+    targetEl.dispatchEvent(new MouseEvent('mouseover', mouseInit));
+    targetEl.dispatchEvent(new MouseEvent('mouseenter', { ...mouseInit, bubbles: false }));
+    targetEl.dispatchEvent(new PointerEvent('pointerdown', ptrInit));
+    targetEl.dispatchEvent(new MouseEvent('mousedown', mouseInit));
+    targetEl.dispatchEvent(new PointerEvent('pointerup', { ...ptrInit, buttons: 0 }));
+    targetEl.dispatchEvent(new MouseEvent('mouseup', { ...mouseInit, buttons: 0 }));
+    targetEl.click();
+    return true;
+  }
+
+  function getRowPlayButton(row) {
+    return row?.querySelector(
+      'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
+    ) || null;
   }
 
   function getRenderedQueueRows() {
@@ -650,7 +728,7 @@
     for (const btn of btns) {
       let el = btn.parentElement;
       let steps = 0;
-      while (el && el !== scroller && steps < 6) {
+      while (el && el !== scroller && steps < 14) {
         if (el.querySelector('a')) {
           break;
         }
@@ -666,15 +744,22 @@
     return rows;
   }
 
-  function extractFiberItem(row) {
-    const fiberKey = Object.keys(row).find(
+  function extractFiberItemFromElement(el, maxHops = 24) {
+    if (!el) return null;
+    const fiberKey = Object.keys(el).find(
       (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
     );
-    let fiber = fiberKey ? row[fiberKey] : null;
+    let fiber = fiberKey ? el[fiberKey] : null;
     let steps = 0;
-    while (fiber && steps < 10) {
+    while (fiber && steps < maxHops) {
       const props = fiber.memoizedProps || fiber.pendingProps;
-      const candidate = props?.item || props?.metadata || props?.track;
+      const candidate =
+        props?.item ||
+        props?.playQueueItem ||
+        props?.metadata ||
+        props?.track ||
+        props?.mediaItem ||
+        props?.data;
       if (candidate && (candidate.playQueueItemID || candidate.ratingKey || candidate.title)) {
         return candidate;
       }
@@ -682,6 +767,13 @@
       steps += 1;
     }
     return null;
+  }
+
+  function extractFiberItem(row) {
+    return (
+      extractFiberItemFromElement(row, 24) ||
+      extractFiberItemFromElement(getRowPlayButton(row), 24)
+    );
   }
 
   function scrapePlayQueueFromDom() {
@@ -696,9 +788,7 @@
     const items = rows.map((row, idx) => {
       const fiberItem = extractFiberItem(row);
       const links = Array.from(row.querySelectorAll('a'));
-      const playBtn = row.querySelector(
-        'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
-      );
+      const playBtn = getRowPlayButton(row);
       const img = row.querySelector('img');
       const removeBtn = row.querySelector('[class*="AudioVideoPlayQueueItem-removeButton-"]');
 
@@ -783,11 +873,10 @@
     if (allowDomPeek) {
       const openBtn = findPlayQueueButton();
       if (openBtn) {
-        openBtn.click();
-        await waitForQueueRows(600);
+        dispatchRealClick(openBtn);
+        await waitForQueueRows(700);
         const scraped = scrapePlayQueueFromDom();
-        const minBtn = findMinimizePlayerButton();
-        if (minBtn) minBtn.click();
+        dispatchRealClick(findMinimizePlayerButton());
         if (scraped) {
           queueStore.queue = scraped;
           broadcastQueueUpdate();
@@ -799,43 +888,26 @@
     return queueStore.queue;
   }
 
-  async function playQueueItem(payload) {
-    if (!payload) return false;
-    const wasClosed = !findPlayQueueScroller();
-    if (wasClosed) {
-      const openBtn = findPlayQueueButton();
-      if (!openBtn) return false;
-      openBtn.click();
-    }
-
-    const rows = await waitForQueueRows(700);
-    if (!rows || rows.length === 0) {
-      if (wasClosed) findMinimizePlayerButton()?.click();
-      return false;
-    }
-
-    let matchedRow = null;
+  function matchRowInList(rows, payload, allowIndexFallback = true) {
+    if (!rows || rows.length === 0) return null;
 
     // 1. Match by React fiber playQueueItemID
     if (payload.playQueueItemID && payload.playQueueItemID > 0) {
       for (const row of rows) {
         const fiberItem = extractFiberItem(row);
         if (fiberItem && Number(fiberItem.playQueueItemID) === Number(payload.playQueueItemID)) {
-          matchedRow = row;
-          break;
+          return row;
         }
       }
     }
 
     // 2. Match by title + artist (then title-only fallback)
-    if (!matchedRow && payload.title) {
+    if (payload.title) {
       const targetTitle = payload.title.trim().toLowerCase();
       const targetArtist = (payload.artist || '').trim().toLowerCase();
       let titleOnlyMatch = null;
       for (const row of rows) {
-        const playBtn = row.querySelector(
-          'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
-        );
+        const playBtn = getRowPlayButton(row);
         const label = (playBtn?.getAttribute('aria-label') || '')
           .replace(/^Play\s+(Play\s+)?/i, '')
           .trim()
@@ -845,45 +917,126 @@
         if (!titleMatches) continue;
         if (!titleOnlyMatch) titleOnlyMatch = row;
         if (!targetArtist || (row.textContent || '').toLowerCase().includes(targetArtist)) {
-          matchedRow = row;
-          break;
+          return row;
         }
       }
-      if (!matchedRow && titleOnlyMatch) {
-        matchedRow = titleOnlyMatch;
+      if (titleOnlyMatch) {
+        return titleOnlyMatch;
       }
     }
 
-    // 3. Fallback by index if rendered slice aligns with queueStore
+    // 3. Fallback by index only when caller explicitly permits positional matching
     if (
-      !matchedRow &&
+      allowIndexFallback &&
       Number.isInteger(payload.index) &&
       payload.index >= 0 &&
       payload.index < rows.length
     ) {
-      matchedRow = rows[payload.index];
+      return rows[payload.index];
     }
 
-    const targetPlayBtn = matchedRow?.querySelector(
-      'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
-    );
-    if (!targetPlayBtn) {
-      if (wasClosed) findMinimizePlayerButton()?.click();
+    return null;
+  }
+
+  async function findVirtualizedQueueRow(payload) {
+    let rows = await waitForQueueRows(1000);
+    if (!rows || rows.length === 0) return null;
+
+    let matched = matchRowInList(rows, payload, false);
+    if (matched) return matched;
+
+    const scroller = findPlayQueueScroller();
+    if (scroller && scroller.scrollHeight > scroller.clientHeight + 20) {
+      const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+      const totalItems = queueStore.queue?.items?.length || 0;
+
+      // Try jumping near the proportional offset first when the window index is known
+      if (totalItems > 0 && Number.isInteger(payload.index) && payload.index >= 0) {
+        const approxRatio = payload.index / Math.max(1, totalItems - 1);
+        scroller.scrollTop = Math.round(maxScroll * approxRatio);
+        await new Promise((r) => setTimeout(r, 70));
+        rows = getRenderedQueueRows();
+        matched = matchRowInList(rows, payload, false);
+        if (matched) return matched;
+      }
+
+      // Sweep through the virtualized list from top to bottom
+      const step = Math.max(180, Math.floor(scroller.clientHeight * 0.7));
+      for (let pos = 0; pos <= maxScroll + step && pos <= maxScroll * 1.1; pos += step) {
+        scroller.scrollTop = Math.min(maxScroll, pos);
+        await new Promise((r) => setTimeout(r, 50));
+        rows = getRenderedQueueRows();
+        matched = matchRowInList(rows, payload, false);
+        if (matched) return matched;
+        if (pos >= maxScroll) break;
+      }
+    }
+
+    // Last resort: check positional index on the top-most slice only if ID/title unavailable
+    if (!payload.playQueueItemID && !payload.title) {
+      return matchRowInList(getRenderedQueueRows(), payload, true);
+    }
+    return null;
+  }
+
+  async function playQueueItem(payload) {
+    if (!payload) return false;
+    const wasClosed = !findPlayQueueScroller();
+    if (wasClosed) {
+      const openBtn = findPlayQueueButton();
+      if (!openBtn) {
+        console.warn('[Playkeys Bridge] playQueueItem aborted: Play Queue button not found');
+        return false;
+      }
+      dispatchRealClick(openBtn);
+    }
+
+    const matchedRow = await findVirtualizedQueueRow(payload);
+    if (!matchedRow) {
+      console.warn('[Playkeys Bridge] playQueueItem aborted: matching row not found', payload);
+      if (wasClosed) dispatchRealClick(findMinimizePlayerButton());
       return false;
     }
 
-    targetPlayBtn.click();
-    await new Promise((r) => setTimeout(r, 110));
+    const targetPlayBtn = getRowPlayButton(matchedRow);
+    if (!targetPlayBtn) {
+      console.warn('[Playkeys Bridge] playQueueItem aborted: row play button not found');
+      if (wasClosed) dispatchRealClick(findMinimizePlayerButton());
+      return false;
+    }
+
+    const targetId = Number(payload.playQueueItemID) || null;
+    const prevSelectedId = queueStore.queue?.selectedItemID || null;
+    const prevTitle = window.navigator?.mediaSession?.metadata?.title || '';
+
+    matchedRow.scrollIntoView({ block: 'center' });
+    await new Promise((r) => setTimeout(r, 25));
+
+    dispatchRealClick(targetPlayBtn);
+
+    // Wait briefly for Plex's timeline/mediaSession/queue to register the switch before minimizing
+    const confirmStart = Date.now();
+    while (Date.now() - confirmStart < 450) {
+      await new Promise((r) => setTimeout(r, 45));
+      const curSelected = queueStore.queue?.selectedItemID || null;
+      const curTitle = window.navigator?.mediaSession?.metadata?.title || '';
+      if (
+        (targetId && curSelected === targetId && curSelected !== prevSelectedId) ||
+        (payload.title && curTitle && curTitle !== prevTitle && curTitle.toLowerCase() === payload.title.trim().toLowerCase())
+      ) {
+        break;
+      }
+    }
 
     if (wasClosed) {
-      findMinimizePlayerButton()?.click();
+      dispatchRealClick(findMinimizePlayerButton());
     }
 
-    if (queueStore.queue && payload.playQueueItemID) {
-      queueStore.queue.selectedItemID = payload.playQueueItemID;
+    if (queueStore.queue && targetId) {
+      queueStore.queue.selectedItemID = targetId;
       broadcastQueueUpdate();
     }
-    scheduleQueueRefresh(400);
+    scheduleQueueRefresh(350);
     return true;
   }
 

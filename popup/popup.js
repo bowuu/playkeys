@@ -704,10 +704,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (durEl.textContent) rowBtn.appendChild(durEl);
 
       rowBtn.addEventListener('click', async () => {
-        if (currentQueue) {
-          currentQueue.selectedItemID = item.playQueueItemID;
-          renderQueue(currentQueue);
-        }
+        rowBtn.disabled = true;
         const res = await sendPlayerAction('playQueueItem', {
           playQueueItemID: item.playQueueItemID,
           title: item.title,
@@ -715,13 +712,23 @@ document.addEventListener('DOMContentLoaded', () => {
           album: item.album,
           index
         });
-        if (res?.queue) {
-          renderQueue(res.queue);
+        rowBtn.disabled = false;
+
+        if (res?.success) {
+          if (res.queue) {
+            renderQueue(res.queue);
+          } else if (currentQueue) {
+            currentQueue.selectedItemID = item.playQueueItemID;
+            renderQueue(currentQueue);
+          }
+          setTimeout(() => {
+            refreshActiveTab();
+            loadQueue(false);
+          }, 450);
+        } else {
+          console.warn('[Playkeys Popup] Failed to switch queue item:', res?.error || item.title);
+          loadQueue(true);
         }
-        setTimeout(() => {
-          refreshActiveTab();
-          loadQueue(false);
-        }, 400);
       });
 
       fragment.appendChild(rowBtn);
