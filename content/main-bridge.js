@@ -6,7 +6,7 @@
  */
 
 (() => {
-  const BRIDGE_VERSION = 6;
+  const BRIDGE_VERSION = 7;
 
   if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
@@ -619,9 +619,14 @@
   }
 
   function findPlayQueueButton() {
-    return document.querySelector(
+    const explicit = document.querySelector(
       'button[aria-label="Play Queue"], button[title="Play Queue"], button[aria-description="Play Queue"], button[class*="playQueue" i]'
     );
+    if (explicit) return explicit;
+
+    const volBtn = document.querySelector('button[class*="PlayerControls-volumeButton-"]');
+    const prev = volBtn?.previousElementSibling;
+    return prev && prev.tagName === 'BUTTON' ? prev : null;
   }
 
   function findMinimizePlayerButton() {
@@ -633,17 +638,32 @@
   function getRenderedQueueRows() {
     const scroller = findPlayQueueScroller();
     if (!scroller) return [];
-    const items = Array.from(scroller.querySelectorAll('[class*="AudioVideoPlayQueueItem-"]'));
-    if (items.length > 0) return items;
 
     const btns = Array.from(
       scroller.querySelectorAll(
         'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
       )
     );
-    return btns
-      .map((btn) => btn.closest('div[class]')?.parentElement || btn.parentElement)
-      .filter(Boolean);
+
+    const rows = [];
+    const seen = new Set();
+    for (const btn of btns) {
+      let el = btn.parentElement;
+      let steps = 0;
+      while (el && el !== scroller && steps < 6) {
+        if (el.querySelector('a')) {
+          break;
+        }
+        el = el.parentElement;
+        steps += 1;
+      }
+      const row = el && el !== scroller ? el : btn.parentElement;
+      if (row && !seen.has(row)) {
+        seen.add(row);
+        rows.push(row);
+      }
+    }
+    return rows;
   }
 
   function extractFiberItem(row) {
@@ -807,10 +827,11 @@
       }
     }
 
-    // 2. Match by title + artist/album text
+    // 2. Match by title + artist (then title-only fallback)
     if (!matchedRow && payload.title) {
       const targetTitle = payload.title.trim().toLowerCase();
       const targetArtist = (payload.artist || '').trim().toLowerCase();
+      let titleOnlyMatch = null;
       for (const row of rows) {
         const playBtn = row.querySelector(
           'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
@@ -822,10 +843,14 @@
         const firstLink = row.querySelector('a')?.textContent?.trim().toLowerCase() || '';
         const titleMatches = label === targetTitle || firstLink === targetTitle;
         if (!titleMatches) continue;
+        if (!titleOnlyMatch) titleOnlyMatch = row;
         if (!targetArtist || (row.textContent || '').toLowerCase().includes(targetArtist)) {
           matchedRow = row;
           break;
         }
+      }
+      if (!matchedRow && titleOnlyMatch) {
+        matchedRow = titleOnlyMatch;
       }
     }
 
@@ -848,7 +873,7 @@
     }
 
     targetPlayBtn.click();
-    await new Promise((r) => setTimeout(r, 70));
+    await new Promise((r) => setTimeout(r, 110));
 
     if (wasClosed) {
       findMinimizePlayerButton()?.click();
