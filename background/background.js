@@ -81,14 +81,40 @@ async function persistSessionState() {
   }
 }
 
+let cachedCustomOrigins = null;
+
+function invalidateCustomOriginsCache() {
+  cachedCustomOrigins = null;
+}
+
+if (chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'sync' && changes.customOrigins) {
+      invalidateCustomOriginsCache();
+    }
+  });
+}
+
+if (chrome.permissions?.onAdded) {
+  chrome.permissions.onAdded.addListener(invalidateCustomOriginsCache);
+}
+if (chrome.permissions?.onRemoved) {
+  chrome.permissions.onRemoved.addListener(invalidateCustomOriginsCache);
+}
+
 /**
  * Get configured custom origins whose runtime host permissions are currently granted
  */
 async function getGrantedCustomOrigins() {
+  if (cachedCustomOrigins !== null) return cachedCustomOrigins;
+
   try {
     const data = await chrome.storage.sync.get({ customOrigins: [] });
     const configured = Array.isArray(data.customOrigins) ? data.customOrigins : [];
-    if (configured.length === 0) return [];
+    if (configured.length === 0) {
+      cachedCustomOrigins = [];
+      return cachedCustomOrigins;
+    }
 
     const granted = [];
     for (const origin of configured) {
@@ -99,6 +125,7 @@ async function getGrantedCustomOrigins() {
         // Ignore malformed pattern
       }
     }
+    cachedCustomOrigins = granted;
     return granted;
   } catch (err) {
     console.warn('[Playkeys Background] Storage access error:', err);
@@ -110,7 +137,7 @@ async function getGrantedCustomOrigins() {
  * Determine if a URL is an authorized Plex Web URL (official or granted custom origin)
  */
 async function isConfiguredPlexUrl(url) {
-  if (!url) return false;
+  if (!url || !/^https?:\/\//i.test(url)) return false;
   if (isOfficialPlexUrl(url)) return true;
 
   const customOrigins = await getGrantedCustomOrigins();
@@ -508,6 +535,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'SYNC_CUSTOM_ORIGINS': {
       (async () => {
+        invalidateCustomOriginsCache();
         await updateDynamicContentScripts();
         await injectIntoAllOpenPlexTabs();
         await refreshGlobalBadge();
@@ -576,6 +604,11 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  const urlToCheck = changeInfo.url || (changeInfo.status === 'complete' ? tab?.url : '');
+  if (!urlToCheck || !/^https?:\/\//i.test(urlToCheck)) {
+    if (!changeInfo.url || !tabStates.has(tabId)) return;
+  }
+
   await ensureSessionLoaded();
 
   if (changeInfo.url) {

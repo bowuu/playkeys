@@ -6,7 +6,7 @@
  */
 
 (() => {
-  const BRIDGE_VERSION = 8;
+  const BRIDGE_VERSION = 9;
 
   if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
@@ -463,10 +463,31 @@
     };
   }
 
+  let pendingQueueSelection = null;
+
+  function applyPendingSelection(queue) {
+    if (!queue || !pendingQueueSelection) return queue;
+    if (Date.now() >= pendingQueueSelection.expiresAt) {
+      pendingQueueSelection = null;
+      return queue;
+    }
+    if (Number(queue.selectedItemID) === Number(pendingQueueSelection.itemId)) {
+      pendingQueueSelection = null;
+      return queue;
+    }
+    const idx = Array.isArray(queue.items)
+      ? queue.items.findIndex((it) => Number(it.playQueueItemID) === Number(pendingQueueSelection.itemId))
+      : -1;
+    queue.selectedItemID = pendingQueueSelection.itemId;
+    if (idx !== -1) queue.selectedOffset = idx;
+    return queue;
+  }
+
   async function fetchPlayQueueFromStoredUrl() {
     if (!queueStore.lastQueueUrl) return null;
     try {
-      const res = await fetch(queueStore.lastQueueUrl, {
+      const fetchFn = window.__PLAYKEYS_ORIG_FETCH__ || window.fetch;
+      const res = await fetchFn(queueStore.lastQueueUrl, {
         headers: { Accept: 'application/json' }
       });
       if (!res.ok) return null;
@@ -474,7 +495,19 @@
       if (data?.MediaContainer) {
         const parsedUrl = new URL(queueStore.lastQueueUrl);
         const token = parsedUrl.searchParams.get('X-Plex-Token') || queueStore.token;
-        queueStore.queue = normalizeMediaContainerQueue(data.MediaContainer, parsedUrl.origin, token);
+        const normalized = applyPendingSelection(
+          normalizeMediaContainerQueue(data.MediaContainer, parsedUrl.origin, token)
+        );
+        const reduxQueue = buildQueueFromRedux();
+        if (
+          reduxQueue?.selectedItemID &&
+          normalized.selectedItemID !== reduxQueue.selectedItemID &&
+          normalized.items.some((it) => Number(it.playQueueItemID) === Number(reduxQueue.selectedItemID))
+        ) {
+          normalized.selectedItemID = reduxQueue.selectedItemID;
+          normalized.selectedOffset = reduxQueue.selectedOffset;
+        }
+        queueStore.queue = normalized;
         broadcastQueueUpdate();
         return queueStore.queue;
       }
@@ -486,8 +519,15 @@
 
   function scheduleQueueRefresh(delayMs = 350) {
     clearTimeout(queueRefreshTimer);
-    queueRefreshTimer = setTimeout(() => {
-      fetchPlayQueueFromStoredUrl();
+    queueRefreshTimer = setTimeout(async () => {
+      const fetched = await fetchPlayQueueFromStoredUrl();
+      if (!fetched) {
+        const reduxQueue = buildQueueFromRedux();
+        if (reduxQueue) {
+          queueStore.queue = reduxQueue;
+          broadcastQueueUpdate();
+        }
+      }
     }, delayMs);
   }
 
@@ -512,10 +552,12 @@
       } else if (data.MediaContainer.playQueueID && queueStore.token) {
         queueStore.lastQueueUrl = `${parsed.origin}/playQueues/${data.MediaContainer.playQueueID}?own=1&X-Plex-Token=${encodeURIComponent(queueStore.token)}`;
       }
-      queueStore.queue = normalizeMediaContainerQueue(
-        data.MediaContainer,
-        parsed.origin,
-        queueStore.token
+      queueStore.queue = applyPendingSelection(
+        normalizeMediaContainerQueue(
+          data.MediaContainer,
+          parsed.origin,
+          queueStore.token
+        )
       );
       broadcastQueueUpdate();
       return;
@@ -531,6 +573,13 @@
       }
 
       if (queueStore.queue && Number.isFinite(pqItemId) && pqItemId > 0) {
+        if (pendingQueueSelection && Date.now() < pendingQueueSelection.expiresAt) {
+          if (pqItemId === pendingQueueSelection.itemId) {
+            pendingQueueSelection = null;
+          } else {
+            return;
+          }
+        }
         if (queueStore.queue.selectedItemID !== pqItemId) {
           queueStore.queue.selectedItemID = pqItemId;
           const idx = queueStore.queue.items.findIndex((it) => it.playQueueItemID === pqItemId);
@@ -551,6 +600,7 @@
 
     const origFetch = window.fetch;
     if (typeof origFetch === 'function') {
+      window.__PLAYKEYS_ORIG_FETCH__ = origFetch;
       window.fetch = async function (...args) {
         const res = await origFetch.apply(this, args);
         try {
@@ -855,10 +905,106 @@
     return getRenderedQueueRows();
   }
 
+  let hiddenOverlayDepth = 0;
+
+  /**
+   * Temporarily hide Plex's full-screen player / Play Queue overlay while
+   * performing a background DOM peek or item selection so the UI never flashes.
+   */
+  async function withHiddenPlayQueueOverlay(fn) {
+    const styleId = 'playkeys-hide-queue-overlay';
+    hiddenOverlayDepth += 1;
+    let styleEl = document.getElementById(styleId);
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = styleId;
+      styleEl.textContent =
+        '[class*="Player-fullPlayerContainer-"], [class*="AudioVideoPlayQueue-"] { opacity: 0 !important; pointer-events: none !important; transition: none !important; animation: none !important; }';
+      (document.head || document.documentElement).appendChild(styleEl);
+    }
+
+    try {
+      return await fn();
+    } finally {
+      // Allow Plex a brief moment to collapse the full-screen player before unhiding
+      await new Promise((r) => setTimeout(r, 60));
+      hiddenOverlayDepth = Math.max(0, hiddenOverlayDepth - 1);
+      if (hiddenOverlayDepth === 0) {
+        const el = document.getElementById(styleId);
+        if (el) el.remove();
+      }
+    }
+  }
+
+  function buildQueueFromRedux() {
+    try {
+      const ctx = getPlexReduxContext();
+      if (!ctx) return null;
+      const state = ctx.store.getState();
+      const avp = state?.ui?.audioVideoPlayer;
+      const pq = avp?.playQueue;
+      const pqItems = Array.isArray(pq?.playQueueItems) ? pq.playQueueItems : null;
+      if (!pq || !pqItems || pqItems.length === 0) return null;
+
+      const server = avp?.serverEntityID ? state?.entities?.servers?.[avp.serverEntityID] : null;
+      const serverOrigin = server?.uri || queueStore.serverOrigin || '';
+      const token = server?.accessToken || queueStore.token || '';
+      if (serverOrigin) queueStore.serverOrigin = serverOrigin;
+      if (token) queueStore.token = token;
+      if (pq.playQueueID && serverOrigin && token && !queueStore.lastQueueUrl) {
+        queueStore.lastQueueUrl = `${serverOrigin}/playQueues/${pq.playQueueID}?own=1&X-Plex-Token=${encodeURIComponent(token)}`;
+      }
+
+      const pqEntities = state?.entities?.playQueueItems || {};
+      const metaEntities = state?.entities?.metadataItems || {};
+
+      const items = pqItems
+        .map((entityId) => {
+          const pqRec = pqEntities[entityId];
+          const meta = pqRec?.metadataItem ? metaEntities[pqRec.metadataItem] : null;
+          if (!pqRec && !meta) return null;
+          const thumbPath = meta?.thumb || meta?.parentThumb || meta?.grandparentThumb || '';
+          return {
+            playQueueItemID: Number(pqRec?.playQueueItemID) || null,
+            ratingKey: meta?.ratingKey ? String(meta.ratingKey) : '',
+            parentRatingKey: meta?.parentRatingKey ? String(meta.parentRatingKey) : '',
+            title: meta?.title || 'Unknown Track',
+            artist: meta?.originalTitle || meta?.grandparentTitle || '',
+            album: meta?.parentTitle || '',
+            duration: Math.round((Number(meta?.duration) || 0) / 1000),
+            artworkUrl: buildQueueArtworkUrl(thumbPath, serverOrigin, token)
+          };
+        })
+        .filter(Boolean);
+
+      if (items.length === 0) return null;
+
+      return applyPendingSelection({
+        playQueueID: Number(pq.playQueueID) || null,
+        playQueueTitle: queueStore.queue?.playQueueTitle || 'Play Queue',
+        totalCount: Number(pq.playQueueTotalCount ?? pq.length ?? items.length) || items.length,
+        selectedItemID: Number(pq.playQueueSelectedItemID) || null,
+        selectedOffset: Number(pq.playQueueSelectedItemOffset ?? pq.currentIndex) || 0,
+        shuffled: Boolean(pq.playQueueShuffled),
+        items
+      });
+    } catch {
+      return null;
+    }
+  }
+
   async function refreshPlayQueue(allowDomPeek = false) {
+    const reduxQueue = buildQueueFromRedux();
+
     if (queueStore.lastQueueUrl) {
       const fetched = await fetchPlayQueueFromStoredUrl();
       if (fetched) return fetched;
+    }
+
+    if (reduxQueue) {
+      queueStore.queue = reduxQueue;
+      broadcastQueueUpdate();
+      return reduxQueue;
     }
 
     if (findPlayQueueScroller()) {
@@ -873,10 +1019,13 @@
     if (allowDomPeek) {
       const openBtn = findPlayQueueButton();
       if (openBtn) {
-        dispatchRealClick(openBtn);
-        await waitForQueueRows(700);
-        const scraped = scrapePlayQueueFromDom();
-        dispatchRealClick(findMinimizePlayerButton());
+        const scraped = await withHiddenPlayQueueOverlay(async () => {
+          dispatchRealClick(openBtn);
+          await waitForQueueRows(700);
+          const result = scrapePlayQueueFromDom();
+          dispatchRealClick(findMinimizePlayerButton());
+          return result;
+        });
         if (scraped) {
           queueStore.queue = scraped;
           broadcastQueueUpdate();
@@ -979,65 +1128,215 @@
     return null;
   }
 
-  async function playQueueItem(payload) {
-    if (!payload) return false;
-    const wasClosed = !findPlayQueueScroller();
-    if (wasClosed) {
-      const openBtn = findPlayQueueButton();
-      if (!openBtn) {
-        console.warn('[Playkeys Bridge] playQueueItem aborted: Play Queue button not found');
-        return false;
-      }
-      dispatchRealClick(openBtn);
-    }
+  function getPlexReduxContext() {
+    const plexRoot = document.querySelector('#plex');
+    const rootKey =
+      plexRoot &&
+      Object.keys(plexRoot).find(
+        (k) => k.startsWith('__reactContainer') || k.startsWith('__reactFiber')
+      );
+    if (!rootKey) return null;
 
-    const matchedRow = await findVirtualizedQueueRow(payload);
-    if (!matchedRow) {
-      console.warn('[Playkeys Bridge] playQueueItem aborted: matching row not found', payload);
-      if (wasClosed) dispatchRealClick(findMinimizePlayerButton());
-      return false;
-    }
-
-    const targetPlayBtn = getRowPlayButton(matchedRow);
-    if (!targetPlayBtn) {
-      console.warn('[Playkeys Bridge] playQueueItem aborted: row play button not found');
-      if (wasClosed) dispatchRealClick(findMinimizePlayerButton());
-      return false;
-    }
-
-    const targetId = Number(payload.playQueueItemID) || null;
-    const prevSelectedId = queueStore.queue?.selectedItemID || null;
-    const prevTitle = window.navigator?.mediaSession?.metadata?.title || '';
-
-    matchedRow.scrollIntoView({ block: 'center' });
-    await new Promise((r) => setTimeout(r, 25));
-
-    dispatchRealClick(targetPlayBtn);
-
-    // Wait briefly for Plex's timeline/mediaSession/queue to register the switch before minimizing
-    const confirmStart = Date.now();
-    while (Date.now() - confirmStart < 450) {
-      await new Promise((r) => setTimeout(r, 45));
-      const curSelected = queueStore.queue?.selectedItemID || null;
-      const curTitle = window.navigator?.mediaSession?.metadata?.title || '';
-      if (
-        (targetId && curSelected === targetId && curSelected !== prevSelectedId) ||
-        (payload.title && curTitle && curTitle !== prevTitle && curTitle.toLowerCase() === payload.title.trim().toLowerCase())
-      ) {
+    let store = null;
+    const stack = [plexRoot[rootKey]];
+    let steps = 0;
+    while (stack.length > 0 && steps < 300) {
+      const node = stack.pop();
+      steps += 1;
+      const p = node.memoizedProps;
+      if (p && p.store && typeof p.store.getState === 'function' && typeof p.store.dispatch === 'function') {
+        store = p.store;
         break;
       }
+      if (node.child) stack.push(node.child);
+      if (node.sibling) stack.push(node.sibling);
+    }
+    if (!store) return null;
+
+    let playerType = 'audioVideo';
+    const playerEl = document.querySelector('[class*="PlayerContainer-"]');
+    const playerKey =
+      playerEl &&
+      Object.keys(playerEl).find(
+        (k) => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance$')
+      );
+    if (playerKey) {
+      const pStack = [playerEl[playerKey]];
+      let pSteps = 0;
+      while (pStack.length > 0 && pSteps < 80) {
+        const node = pStack.pop();
+        pSteps += 1;
+        if (node.memoizedProps?.playerType) {
+          playerType = node.memoizedProps.playerType;
+          break;
+        }
+        if (node.child) pStack.push(node.child);
+        if (node.sibling) pStack.push(node.sibling);
+      }
     }
 
-    if (wasClosed) {
-      dispatchRealClick(findMinimizePlayerButton());
+    return { store, playerType };
+  }
+
+  function playQueueItemViaRedux(payload) {
+    try {
+      const ctx = getPlexReduxContext();
+      if (!ctx) return false;
+      const { store, playerType } = ctx;
+      const state = store.getState();
+      const pq = state?.ui?.audioVideoPlayer?.playQueue;
+      const pqItems = Array.isArray(pq?.playQueueItems) ? pq.playQueueItems : null;
+      if (!pqItems || pqItems.length === 0) return false;
+
+      const targetId = Number(payload.playQueueItemID);
+      const pqEntities = state?.entities?.playQueueItems || {};
+      const metaEntities = state?.entities?.metadataItems || {};
+      let targetIndex = -1;
+
+      // 1. Match by playQueueItemID against entity ID suffix or entity record
+      if (Number.isFinite(targetId) && targetId > 0) {
+        const idStr = String(targetId);
+        const suffix = `--${idStr}`;
+        targetIndex = pqItems.findIndex((entityId) => {
+          if (typeof entityId !== 'string') return false;
+          if (entityId.endsWith(suffix)) return true;
+          const rec = pqEntities[entityId];
+          return rec && String(rec.playQueueItemID) === idStr;
+        });
+      }
+
+      // 2. Match by title + artist via Redux entities
+      if (targetIndex === -1 && payload.title) {
+        const targetTitle = payload.title.trim().toLowerCase();
+        const targetArtist = (payload.artist || '').trim().toLowerCase();
+        targetIndex = pqItems.findIndex((entityId) => {
+          const pqRec = pqEntities[entityId];
+          const meta = pqRec?.metadataItem ? metaEntities[pqRec.metadataItem] : null;
+          if (!meta) return false;
+          const title = (meta.title || '').trim().toLowerCase();
+          if (title !== targetTitle) return false;
+          if (!targetArtist) return true;
+          const artist = (meta.originalTitle || meta.grandparentTitle || '').trim().toLowerCase();
+          return artist === targetArtist || artist.includes(targetArtist);
+        });
+      }
+
+      // 3. Positional fallback only when ID/title unavailable
+      if (
+        targetIndex === -1 &&
+        (!Number.isFinite(targetId) || targetId <= 0) &&
+        !payload.title &&
+        Number.isInteger(payload.index) &&
+        payload.index >= 0 &&
+        payload.index < pqItems.length
+      ) {
+        targetIndex = payload.index;
+      }
+
+      if (targetIndex < 0 || targetIndex >= pqItems.length) {
+        return false;
+      }
+
+      store.dispatch({
+        type: 'ui/player/playQueue/playItemByIndex',
+        payload: { playerType, index: targetIndex }
+      });
+
+      const resolvedEntityId = pqItems[targetIndex];
+      const resolvedId =
+        (Number.isFinite(targetId) && targetId > 0 && targetId) ||
+        Number(pqEntities[resolvedEntityId]?.playQueueItemID) ||
+        null;
+
+      if (resolvedId) {
+        pendingQueueSelection = {
+          itemId: resolvedId,
+          expiresAt: Date.now() + 1500
+        };
+      }
+
+      if (queueStore.queue && resolvedId) {
+        queueStore.queue.selectedItemID = resolvedId;
+        queueStore.queue.selectedOffset = targetIndex;
+        broadcastQueueUpdate();
+      }
+      scheduleQueueRefresh(250);
+      return true;
+    } catch (err) {
+      console.warn('[Playkeys Bridge] Redux playQueueItem failed:', err);
+      return false;
+    }
+  }
+
+  async function playQueueItem(payload) {
+    if (!payload) return false;
+
+    if (playQueueItemViaRedux(payload)) {
+      return true;
     }
 
-    if (queueStore.queue && targetId) {
-      queueStore.queue.selectedItemID = targetId;
-      broadcastQueueUpdate();
-    }
-    scheduleQueueRefresh(350);
-    return true;
+    const wasClosed = !findPlayQueueScroller();
+
+    const executeSelection = async () => {
+      if (wasClosed) {
+        const openBtn = findPlayQueueButton();
+        if (!openBtn) {
+          console.warn('[Playkeys Bridge] playQueueItem aborted: Play Queue button not found');
+          return false;
+        }
+        dispatchRealClick(openBtn);
+      }
+
+      const matchedRow = await findVirtualizedQueueRow(payload);
+      if (!matchedRow) {
+        console.warn('[Playkeys Bridge] playQueueItem aborted: matching row not found', payload);
+        if (wasClosed) dispatchRealClick(findMinimizePlayerButton());
+        return false;
+      }
+
+      const targetPlayBtn = getRowPlayButton(matchedRow);
+      if (!targetPlayBtn) {
+        console.warn('[Playkeys Bridge] playQueueItem aborted: row play button not found');
+        if (wasClosed) dispatchRealClick(findMinimizePlayerButton());
+        return false;
+      }
+
+      const targetId = Number(payload.playQueueItemID) || null;
+      const prevSelectedId = queueStore.queue?.selectedItemID || null;
+      const prevTitle = window.navigator?.mediaSession?.metadata?.title || '';
+
+      matchedRow.scrollIntoView({ block: 'center' });
+      await new Promise((r) => setTimeout(r, 25));
+
+      dispatchRealClick(targetPlayBtn);
+
+      // Wait briefly for Plex's timeline/mediaSession/queue to register the switch before minimizing
+      const confirmStart = Date.now();
+      while (Date.now() - confirmStart < 450) {
+        await new Promise((r) => setTimeout(r, 45));
+        const curSelected = queueStore.queue?.selectedItemID || null;
+        const curTitle = window.navigator?.mediaSession?.metadata?.title || '';
+        if (
+          (targetId && curSelected === targetId && curSelected !== prevSelectedId) ||
+          (payload.title && curTitle && curTitle !== prevTitle && curTitle.toLowerCase() === payload.title.trim().toLowerCase())
+        ) {
+          break;
+        }
+      }
+
+      if (wasClosed) {
+        dispatchRealClick(findMinimizePlayerButton());
+      }
+
+      if (queueStore.queue && targetId) {
+        queueStore.queue.selectedItemID = targetId;
+        broadcastQueueUpdate();
+      }
+      scheduleQueueRefresh(350);
+      return true;
+    };
+
+    return wasClosed ? withHiddenPlayQueueOverlay(executeSelection) : executeSelection();
   }
 
   /**

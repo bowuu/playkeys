@@ -46,13 +46,14 @@
       domObserver.disconnect();
       domObserver = null;
     }
+    window.removeEventListener('message', onBridgeMessage);
     detachMediaListeners();
   }
 
   /**
    * Listen for messages from page-context main-bridge.js
    */
-  window.addEventListener('message', (event) => {
+  function onBridgeMessage(event) {
     if (event.source !== window || !event.data || event.data.source !== 'PLAYKEYS_PAGE_BRIDGE') {
       return;
     }
@@ -71,7 +72,9 @@
           .catch(() => {});
       }
     }
-  });
+  }
+
+  window.addEventListener('message', onBridgeMessage);
 
   /**
    * Dispatch action to main-bridge.js and resolve { handled, result }

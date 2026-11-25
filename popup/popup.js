@@ -59,6 +59,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnMute = document.getElementById('btnMute');
   const iconVolHigh = document.getElementById('iconVolHigh');
   const iconVolMuted = document.getElementById('iconVolMuted');
+  const headerVolumeControl = document.getElementById('headerVolumeControl');
+  const btnVolumeTrigger = document.getElementById('btnVolumeTrigger');
+  const iconTriggerVolHigh = document.getElementById('iconTriggerVolHigh');
+  const iconTriggerVolMuted = document.getElementById('iconTriggerVolMuted');
+  const volumePopover = document.getElementById('volumePopover');
   const volumeSlider = document.getElementById('volumeSlider');
   const volumePercent = document.getElementById('volumePercent');
 
@@ -208,7 +213,8 @@ document.addEventListener('DOMContentLoaded', () => {
    */
   function updateSliderFill(slider, percent, fillColor = '#e5a00d', emptyColor = '#262830') {
     const p = Math.max(0, Math.min(100, percent));
-    slider.style.background = `linear-gradient(to right, ${fillColor} 0%, ${fillColor} ${p}%, ${emptyColor} ${p}%, ${emptyColor} 100%)`;
+    const dir = slider === volumeSlider ? 'to top' : 'to right';
+    slider.style.background = `linear-gradient(${dir}, ${fillColor} 0%, ${fillColor} ${p}%, ${emptyColor} ${p}%, ${emptyColor} 100%)`;
   }
 
   /**
@@ -341,16 +347,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!isUserAdjustingVolume && Date.now() >= volumeLockUntil) {
       const volPercent = Math.round((state.volume ?? 1) * 100);
       const isMuted = !!state.isMuted || volPercent === 0;
+      syncVolumeIcons(isMuted);
 
       if (isMuted) {
-        iconVolHigh.classList.add('hidden');
-        iconVolMuted.classList.remove('hidden');
         volumeSlider.value = 0;
         volumePercent.textContent = '0%';
         updateSliderFill(volumeSlider, 0);
       } else {
-        iconVolHigh.classList.remove('hidden');
-        iconVolMuted.classList.add('hidden');
         volumeSlider.value = volPercent;
         volumePercent.textContent = `${volPercent}%`;
         updateSliderFill(volumeSlider, volPercent);
@@ -533,19 +536,22 @@ document.addEventListener('DOMContentLoaded', () => {
     volumeLockUntil = Date.now() + 450;
   });
 
+  function syncVolumeIcons(isMuted) {
+    iconVolHigh.classList.toggle('hidden', isMuted);
+    iconVolMuted.classList.toggle('hidden', !isMuted);
+    if (iconTriggerVolHigh && iconTriggerVolMuted) {
+      iconTriggerVolHigh.classList.toggle('hidden', isMuted);
+      iconTriggerVolMuted.classList.toggle('hidden', !isMuted);
+    }
+  }
+
   volumeSlider.addEventListener('input', () => {
     isUserAdjustingVolume = true;
     volumeLockUntil = Date.now() + 450;
     const val = parseInt(volumeSlider.value, 10);
     volumePercent.textContent = `${val}%`;
     updateSliderFill(volumeSlider, val);
-    if (val === 0) {
-      iconVolHigh.classList.add('hidden');
-      iconVolMuted.classList.remove('hidden');
-    } else {
-      iconVolHigh.classList.remove('hidden');
-      iconVolMuted.classList.add('hidden');
-    }
+    syncVolumeIcons(val === 0);
     scheduleVolumeSend(val);
   });
 
@@ -584,6 +590,33 @@ document.addEventListener('DOMContentLoaded', () => {
       console.warn('[Playkeys Popup] Quick grant error:', err);
     }
   });
+
+  // Header Volume Popover toggle & outside-click dismiss
+  if (btnVolumeTrigger && volumePopover && headerVolumeControl) {
+    const setVolumePopoverOpen = (open) => {
+      volumePopover.classList.toggle('hidden', !open);
+      btnVolumeTrigger.classList.toggle('active', open);
+      btnVolumeTrigger.setAttribute('aria-expanded', String(open));
+    };
+
+    btnVolumeTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = !volumePopover.classList.contains('hidden');
+      setVolumePopoverOpen(!isOpen);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!headerVolumeControl.contains(e.target)) {
+        setVolumePopoverOpen(false);
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        setVolumePopoverOpen(false);
+      }
+    });
+  }
 
   // Top Bar Actions
   focusTabBtn.addEventListener('click', () => {
@@ -649,6 +682,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const renderKey = `${queue.playQueueID}:${queue.selectedItemID}:${queue.items.map((i) => i.playQueueItemID).join(',')}`;
     if (renderKey === lastRenderedQueueKey) return;
+    const isInitialRender = !lastRenderedQueueKey;
+    const prevScrollTop = queueList.scrollTop;
     lastRenderedQueueKey = renderKey;
 
     queueList.innerHTML = '';
@@ -723,8 +758,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           setTimeout(() => {
             refreshActiveTab();
-            loadQueue(false);
-          }, 450);
+          }, 350);
         } else {
           console.warn('[Playkeys Popup] Failed to switch queue item:', res?.error || item.title);
           loadQueue(true);
@@ -736,9 +770,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     queueList.appendChild(fragment);
 
-    const activeRow = queueList.querySelector('.queue-item.active');
-    if (activeRow) {
-      activeRow.scrollIntoView({ block: 'nearest' });
+    if (isInitialRender) {
+      const activeRow = queueList.querySelector('.queue-item.active');
+      if (activeRow) {
+        activeRow.scrollIntoView({ block: 'nearest' });
+      }
+    } else {
+      queueList.scrollTop = prevScrollTop;
     }
   }
 
@@ -761,7 +799,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   tabBtnPlayer.addEventListener('click', () => switchViewTab('player'));
   tabBtnQueue.addEventListener('click', () => switchViewTab('queue'));
-  btnRefreshQueue.addEventListener('click', () => loadQueue(true));
+  btnRefreshQueue.addEventListener('click', async () => {
+    btnRefreshQueue.disabled = true;
+    btnRefreshQueue.classList.add('spinning');
+    lastRenderedQueueKey = '';
+    const minSpin = new Promise((r) => setTimeout(r, 300));
+    try {
+      await Promise.all([loadQueue(true), minSpin]);
+    } finally {
+      btnRefreshQueue.classList.remove('spinning');
+      btnRefreshQueue.disabled = false;
+    }
+  });
   btnLoadQueue.addEventListener('click', () => loadQueue(true));
 
   // Real-time state & queue listeners from content scripts
