@@ -11,7 +11,7 @@ A Chrome extension that adds global media keys, playback status badges, and a po
 
 - **Global media shortcuts:** Control playback with hardware media keys (`Play/Pause`, `Next`, `Previous`, `Stop`) or custom shortcuts from anywhere in your OS.
 - **Playback badge:** Extension icon displays current status (playing or paused) at a glance.
-- **Popup player:** Track info, album art, progress bar with scrubbing, volume slider, track ratings (5-star half/whole or thumbs up/down), and playback controls.
+- **Popup player:** Track info, album art, progress bar with scrubbing, volume slider, track ratings (5-star half/whole or thumbs up/down), Play Queue tab with track selection, and playback controls.
 - **Custom server support:** Connect local or self-hosted Plex Media Server instances on demand.
 - **Lightweight & private:** Manifest V3, no external dependencies or build steps, and zero telemetry.
 

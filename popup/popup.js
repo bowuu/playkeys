@@ -66,6 +66,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const openPlexWebBtn = document.getElementById('openPlexWebBtn');
   const openOptionsBtn = document.getElementById('openOptionsBtn');
 
+  // View Tabs & Play Queue
+  const tabBtnPlayer = document.getElementById('tabBtnPlayer');
+  const tabBtnQueue = document.getElementById('tabBtnQueue');
+  const queueCountBadge = document.getElementById('queueCountBadge');
+  const tabPlayerPanel = document.getElementById('tabPlayerPanel');
+  const tabQueuePanel = document.getElementById('tabQueuePanel');
+  const queueTitle = document.getElementById('queueTitle');
+  const queueMeta = document.getElementById('queueMeta');
+  const btnRefreshQueue = document.getElementById('btnRefreshQueue');
+  const queueList = document.getElementById('queueList');
+  const queueEmpty = document.getElementById('queueEmpty');
+  const btnLoadQueue = document.getElementById('btnLoadQueue');
+
   // State Tracking
   let activeTab = null;
   let currentState = null;
@@ -78,6 +91,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastArtworkUrl = '';
   let ratingMode = 'half_stars';
   let hoverRating = null;
+  let activeViewTab = 'player';
+  let currentQueue = null;
+  let lastRenderedQueueKey = '';
 
   /**
    * Build the 5 star slots inside starRatingRow once
@@ -584,9 +600,175 @@ document.addEventListener('DOMContentLoaded', () => {
     window.close();
   });
 
-  // Real-time state listener from content scripts
+  /**
+   * Switch between Player and Queue tabs
+   */
+  function switchViewTab(tabName) {
+    activeViewTab = tabName === 'queue' ? 'queue' : 'player';
+    const isQueue = activeViewTab === 'queue';
+
+    tabBtnPlayer.classList.toggle('active', !isQueue);
+    tabBtnPlayer.setAttribute('aria-selected', String(!isQueue));
+    tabBtnQueue.classList.toggle('active', isQueue);
+    tabBtnQueue.setAttribute('aria-selected', String(isQueue));
+
+    tabPlayerPanel.classList.toggle('hidden', isQueue);
+    tabQueuePanel.classList.toggle('hidden', !isQueue);
+
+    if (isQueue && activeTab) {
+      loadQueue(false);
+    }
+  }
+
+  /**
+   * Render Play Queue list into the Queue tab
+   */
+  function renderQueue(queue) {
+    currentQueue = queue || null;
+
+    if (!queue || !Array.isArray(queue.items) || queue.items.length === 0) {
+      queueCountBadge.classList.add('hidden');
+      queueTitle.textContent = 'Play Queue';
+      queueMeta.textContent = 'No active queue loaded';
+      queueList.innerHTML = '';
+      queueList.classList.add('hidden');
+      queueEmpty.classList.remove('hidden');
+      lastRenderedQueueKey = '';
+      return;
+    }
+
+    const totalCount = queue.totalCount || queue.items.length;
+    queueCountBadge.textContent = totalCount > 999 ? '999+' : String(totalCount);
+    queueCountBadge.classList.remove('hidden');
+
+    queueTitle.textContent = queue.playQueueTitle || 'Play Queue';
+    queueMeta.textContent = `${totalCount.toLocaleString()} item${totalCount === 1 ? '' : 's'}${queue.shuffled ? ' • Shuffled' : ''}`;
+
+    queueEmpty.classList.add('hidden');
+    queueList.classList.remove('hidden');
+
+    const renderKey = `${queue.playQueueID}:${queue.selectedItemID}:${queue.items.map((i) => i.playQueueItemID).join(',')}`;
+    if (renderKey === lastRenderedQueueKey) return;
+    lastRenderedQueueKey = renderKey;
+
+    queueList.innerHTML = '';
+    const fragment = document.createDocumentFragment();
+
+    queue.items.forEach((item, index) => {
+      const isSelected =
+        queue.selectedItemID !== null &&
+        Number(item.playQueueItemID) === Number(queue.selectedItemID);
+
+      const rowBtn = document.createElement('button');
+      rowBtn.type = 'button';
+      rowBtn.className = `queue-item${isSelected ? ' active' : ''}`;
+      rowBtn.title = `Play ${item.title}`;
+
+      const thumbWrap = document.createElement('div');
+      thumbWrap.className = 'queue-thumb';
+      if (item.artworkUrl) {
+        const img = document.createElement('img');
+        img.src = item.artworkUrl;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.onerror = () => {
+          thumbWrap.innerHTML =
+            '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
+        };
+        thumbWrap.appendChild(img);
+      } else {
+        thumbWrap.innerHTML =
+          '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
+      }
+
+      const info = document.createElement('div');
+      info.className = 'queue-item-info';
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'queue-item-title';
+      titleEl.textContent = item.title || 'Unknown Track';
+
+      const artistEl = document.createElement('span');
+      artistEl.className = 'queue-item-artist';
+      artistEl.textContent = item.artist || item.album || '';
+
+      info.appendChild(titleEl);
+      if (artistEl.textContent) info.appendChild(artistEl);
+
+      const durEl = document.createElement('span');
+      durEl.className = 'queue-item-duration';
+      durEl.textContent = item.duration > 0 ? formatTime(item.duration) : '';
+
+      rowBtn.appendChild(thumbWrap);
+      rowBtn.appendChild(info);
+      if (durEl.textContent) rowBtn.appendChild(durEl);
+
+      rowBtn.addEventListener('click', async () => {
+        if (currentQueue) {
+          currentQueue.selectedItemID = item.playQueueItemID;
+          renderQueue(currentQueue);
+        }
+        const res = await sendPlayerAction('playQueueItem', {
+          playQueueItemID: item.playQueueItemID,
+          title: item.title,
+          artist: item.artist,
+          album: item.album,
+          index
+        });
+        if (res?.queue) {
+          renderQueue(res.queue);
+        }
+        setTimeout(() => {
+          refreshActiveTab();
+          loadQueue(false);
+        }, 400);
+      });
+
+      fragment.appendChild(rowBtn);
+    });
+
+    queueList.appendChild(fragment);
+
+    const activeRow = queueList.querySelector('.queue-item.active');
+    if (activeRow) {
+      activeRow.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  /**
+   * Fetch Play Queue from the active Plex tab
+   */
+  async function loadQueue(allowDomPeek = false) {
+    if (!activeTab) return;
+    const action = allowDomPeek ? 'refreshQueue' : 'getQueue';
+    const res = await sendPlayerAction(action, allowDomPeek ? true : null);
+    if (res?.queue) {
+      renderQueue(res.queue);
+    } else if (!allowDomPeek && !currentQueue) {
+      const refreshed = await sendPlayerAction('refreshQueue', false);
+      if (refreshed?.queue) {
+        renderQueue(refreshed.queue);
+      }
+    }
+  }
+
+  tabBtnPlayer.addEventListener('click', () => switchViewTab('player'));
+  tabBtnQueue.addEventListener('click', () => switchViewTab('queue'));
+  btnRefreshQueue.addEventListener('click', () => loadQueue(true));
+  btnLoadQueue.addEventListener('click', () => loadQueue(true));
+
+  // Real-time state & queue listeners from content scripts
   chrome.runtime.onMessage.addListener((message, sender) => {
-    if (!message || message.type !== 'PLEX_STATE_UPDATE') return;
+    if (!message) return;
+
+    if (message.type === 'PLEX_QUEUE_UPDATE') {
+      if (!sender.tab || !activeTab || sender.tab.id === activeTab.id) {
+        renderQueue(message.queue || null);
+      }
+      return;
+    }
+
+    if (message.type !== 'PLEX_STATE_UPDATE') return;
 
     if (sender.tab && activeTab && sender.tab.id === activeTab.id && message.state) {
       renderState(activeTab, message.state, detectedTab);
@@ -614,5 +796,5 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch(() => {});
 
   setInterval(refreshActiveTab, 1000);
-  refreshActiveTab();
+  refreshActiveTab().then(() => loadQueue(false));
 });

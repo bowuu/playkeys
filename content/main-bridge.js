@@ -6,7 +6,7 @@
  */
 
 (() => {
-  const BRIDGE_VERSION = 5;
+  const BRIDGE_VERSION = 6;
 
   if (window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ === BRIDGE_VERSION && typeof window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ === 'function') {
     return;
@@ -23,10 +23,18 @@
   window.__PLAYKEYS_MAIN_BRIDGE_INITIALIZED__ = true;
   window.__PLAYKEYS_MAIN_BRIDGE_VERSION__ = BRIDGE_VERSION;
 
-  // Preserve captured MediaSession handlers across extension reloads
+  // Preserve captured MediaSession handlers & Play Queue store across extension reloads
   const plexHandlers = (window.__PLAYKEYS_MEDIA_HANDLERS__ =
     window.__PLAYKEYS_MEDIA_HANDLERS__ || new Map());
+  const queueStore = (window.__PLAYKEYS_QUEUE_STORE__ =
+    window.__PLAYKEYS_QUEUE_STORE__ || {
+      queue: null,
+      lastQueueUrl: '',
+      serverOrigin: '',
+      token: ''
+    });
   let lastReportedMeta = null;
+  let queueRefreshTimer = null;
 
   /**
    * Hook window.navigator.mediaSession.setActionHandler once
@@ -402,6 +410,459 @@
   }
 
   /**
+   * Build thumbnail URL for Play Queue items using captured Plex server origin & token
+   */
+  function buildQueueArtworkUrl(thumbPath, serverOrigin, token) {
+    if (!thumbPath) return '';
+    if (/^https?:\/\//i.test(thumbPath)) return thumbPath;
+    if (!serverOrigin) return '';
+    if (token) {
+      return `${serverOrigin}/photo/:/transcode?width=96&height=96&minSize=1&upscale=1&url=${encodeURIComponent(thumbPath)}&X-Plex-Token=${encodeURIComponent(token)}`;
+    }
+    return `${serverOrigin}${thumbPath}`;
+  }
+
+  function broadcastQueueUpdate() {
+    window.postMessage(
+      {
+        source: 'PLAYKEYS_PAGE_BRIDGE',
+        type: 'QUEUE_UPDATE',
+        data: queueStore.queue
+      },
+      '*'
+    );
+  }
+
+  /**
+   * Normalize Plex MediaContainer /playQueues JSON into Playkeys queue state
+   */
+  function normalizeMediaContainerQueue(mc, serverOrigin, token) {
+    const metadataList = Array.isArray(mc.Metadata) ? mc.Metadata : [];
+    const items = metadataList.map((item) => {
+      const thumbPath = item.thumb || item.parentThumb || item.grandparentThumb || '';
+      return {
+        playQueueItemID: Number(item.playQueueItemID) || null,
+        ratingKey: item.ratingKey ? String(item.ratingKey) : '',
+        parentRatingKey: item.parentRatingKey ? String(item.parentRatingKey) : '',
+        title: item.title || 'Unknown Track',
+        artist: item.originalTitle || item.grandparentTitle || '',
+        album: item.parentTitle || '',
+        duration: Math.round((Number(item.duration) || 0) / 1000),
+        artworkUrl: buildQueueArtworkUrl(thumbPath, serverOrigin, token)
+      };
+    });
+
+    return {
+      playQueueID: Number(mc.playQueueID) || null,
+      playQueueTitle: mc.playQueuePlaylistTitle || 'Play Queue',
+      totalCount: Number(mc.playQueueTotalCount ?? mc.size ?? items.length) || items.length,
+      selectedItemID: Number(mc.playQueueSelectedItemID) || null,
+      selectedOffset: Number(mc.playQueueSelectedItemOffset) || 0,
+      shuffled: Boolean(mc.playQueueShuffled),
+      items
+    };
+  }
+
+  async function fetchPlayQueueFromStoredUrl() {
+    if (!queueStore.lastQueueUrl) return null;
+    try {
+      const res = await fetch(queueStore.lastQueueUrl, {
+        headers: { Accept: 'application/json' }
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data?.MediaContainer) {
+        const parsedUrl = new URL(queueStore.lastQueueUrl);
+        const token = parsedUrl.searchParams.get('X-Plex-Token') || queueStore.token;
+        queueStore.queue = normalizeMediaContainerQueue(data.MediaContainer, parsedUrl.origin, token);
+        broadcastQueueUpdate();
+        return queueStore.queue;
+      }
+    } catch {
+      // Ignore transient network errors
+    }
+    return null;
+  }
+
+  function scheduleQueueRefresh(delayMs = 350) {
+    clearTimeout(queueRefreshTimer);
+    queueRefreshTimer = setTimeout(() => {
+      fetchPlayQueueFromStoredUrl();
+    }, delayMs);
+  }
+
+  function handleCapturedNetworkPayload(urlStr, data) {
+    if (!urlStr) return;
+    let parsed;
+    try {
+      parsed = new URL(urlStr, window.location.origin);
+    } catch {
+      return;
+    }
+
+    const tokenParam = parsed.searchParams.get('X-Plex-Token');
+    if (tokenParam) {
+      queueStore.serverOrigin = parsed.origin;
+      queueStore.token = tokenParam;
+    }
+
+    if (/\/playQueues(\/|\?|$)/i.test(parsed.pathname) && data?.MediaContainer) {
+      if (/\/playQueues\/\d+/i.test(parsed.pathname)) {
+        queueStore.lastQueueUrl = parsed.toString();
+      } else if (data.MediaContainer.playQueueID && queueStore.token) {
+        queueStore.lastQueueUrl = `${parsed.origin}/playQueues/${data.MediaContainer.playQueueID}?own=1&X-Plex-Token=${encodeURIComponent(queueStore.token)}`;
+      }
+      queueStore.queue = normalizeMediaContainerQueue(
+        data.MediaContainer,
+        parsed.origin,
+        queueStore.token
+      );
+      broadcastQueueUpdate();
+      return;
+    }
+
+    if (/\/:\/timeline/i.test(parsed.pathname)) {
+      const pqItemId = Number(parsed.searchParams.get('playQueueItemID'));
+      const containerKey = parsed.searchParams.get('containerKey') || '';
+      const pqMatch = /\/playQueues\/(\d+)/i.exec(containerKey);
+      if (pqMatch && !queueStore.lastQueueUrl && queueStore.token) {
+        queueStore.lastQueueUrl = `${parsed.origin}/playQueues/${pqMatch[1]}?own=1&X-Plex-Token=${encodeURIComponent(queueStore.token)}`;
+        scheduleQueueRefresh(100);
+      }
+
+      if (queueStore.queue && Number.isFinite(pqItemId) && pqItemId > 0) {
+        if (queueStore.queue.selectedItemID !== pqItemId) {
+          queueStore.queue.selectedItemID = pqItemId;
+          const idx = queueStore.queue.items.findIndex((it) => it.playQueueItemID === pqItemId);
+          if (idx !== -1) {
+            queueStore.queue.selectedOffset = idx;
+          }
+          broadcastQueueUpdate();
+          scheduleQueueRefresh(350);
+        }
+      }
+    }
+  }
+
+  window.__PLAYKEYS_ON_NET_PAYLOAD__ = handleCapturedNetworkPayload;
+
+  if (!window.__PLAYKEYS_NET_HOOKED__) {
+    window.__PLAYKEYS_NET_HOOKED__ = true;
+
+    const origFetch = window.fetch;
+    if (typeof origFetch === 'function') {
+      window.fetch = async function (...args) {
+        const res = await origFetch.apply(this, args);
+        try {
+          const reqUrl = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+          if (/\/playQueues(\/|\?|$)/i.test(reqUrl)) {
+            res
+              .clone()
+              .json()
+              .then((data) => window.__PLAYKEYS_ON_NET_PAYLOAD__?.(reqUrl, data))
+              .catch(() => {});
+          } else if (/\/:\/timeline/i.test(reqUrl)) {
+            window.__PLAYKEYS_ON_NET_PAYLOAD__?.(reqUrl, null);
+          }
+        } catch {
+          // Never interfere with app fetch
+        }
+        return res;
+      };
+    }
+
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+      this.__playkeysReqUrl = typeof url === 'string' ? url : String(url || '');
+      return origOpen.call(this, method, url, ...rest);
+    };
+
+    XMLHttpRequest.prototype.send = function (...args) {
+      const reqUrl = this.__playkeysReqUrl || '';
+      if (!this.__playkeysHooked && (/\/playQueues(\/|\?|$)/i.test(reqUrl) || /\/:\/timeline/i.test(reqUrl))) {
+        this.__playkeysHooked = true;
+        this.addEventListener('load', function () {
+          try {
+            if (/\/playQueues(\/|\?|$)/i.test(reqUrl)) {
+              let data = null;
+              if (this.responseType === 'json' && this.response) {
+                data = this.response;
+              } else if (
+                (this.responseType === '' || this.responseType === 'text') &&
+                typeof this.responseText === 'string' &&
+                this.responseText.trim().startsWith('{')
+              ) {
+                data = JSON.parse(this.responseText);
+              }
+              if (data) {
+                window.__PLAYKEYS_ON_NET_PAYLOAD__?.(reqUrl, data);
+              }
+            } else if (/\/:\/timeline/i.test(reqUrl)) {
+              window.__PLAYKEYS_ON_NET_PAYLOAD__?.(reqUrl, null);
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        });
+      }
+      return origSend.apply(this, args);
+    };
+  }
+
+  /**
+   * Locate Play Queue DOM controls and rendered item rows
+   */
+  function findPlayQueueScroller() {
+    return document.querySelector('[class*="AudioVideoPlayQueue-content-"]');
+  }
+
+  function findPlayQueueButton() {
+    return document.querySelector(
+      'button[aria-label="Play Queue"], button[title="Play Queue"], button[aria-description="Play Queue"], button[class*="playQueue" i]'
+    );
+  }
+
+  function findMinimizePlayerButton() {
+    return document.querySelector(
+      'button[aria-label="Minimize Player"], button[title="Minimize Player"], button[aria-description="Minimize Player"], button[class*="minimize" i]'
+    );
+  }
+
+  function getRenderedQueueRows() {
+    const scroller = findPlayQueueScroller();
+    if (!scroller) return [];
+    const items = Array.from(scroller.querySelectorAll('[class*="AudioVideoPlayQueueItem-"]'));
+    if (items.length > 0) return items;
+
+    const btns = Array.from(
+      scroller.querySelectorAll(
+        'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
+      )
+    );
+    return btns
+      .map((btn) => btn.closest('div[class]')?.parentElement || btn.parentElement)
+      .filter(Boolean);
+  }
+
+  function extractFiberItem(row) {
+    const fiberKey = Object.keys(row).find(
+      (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+    );
+    let fiber = fiberKey ? row[fiberKey] : null;
+    let steps = 0;
+    while (fiber && steps < 10) {
+      const props = fiber.memoizedProps || fiber.pendingProps;
+      const candidate = props?.item || props?.metadata || props?.track;
+      if (candidate && (candidate.playQueueItemID || candidate.ratingKey || candidate.title)) {
+        return candidate;
+      }
+      fiber = fiber.return;
+      steps += 1;
+    }
+    return null;
+  }
+
+  function scrapePlayQueueFromDom() {
+    const scroller = findPlayQueueScroller();
+    if (!scroller) return null;
+    const rows = getRenderedQueueRows();
+    if (rows.length === 0) return null;
+
+    let selectedItemID = null;
+    let selectedOffset = 0;
+
+    const items = rows.map((row, idx) => {
+      const fiberItem = extractFiberItem(row);
+      const links = Array.from(row.querySelectorAll('a'));
+      const playBtn = row.querySelector(
+        'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
+      );
+      const img = row.querySelector('img');
+      const removeBtn = row.querySelector('[class*="AudioVideoPlayQueueItem-removeButton-"]');
+
+      const titleFromLabel = (playBtn?.getAttribute('aria-label') || '')
+        .replace(/^Play\s+(Play\s+)?/i, '')
+        .trim();
+      const title = fiberItem?.title || links[0]?.textContent?.trim() || titleFromLabel || 'Unknown Track';
+      const artist =
+        fiberItem?.originalTitle ||
+        fiberItem?.grandparentTitle ||
+        links[1]?.textContent?.trim() ||
+        '';
+      const album = fiberItem?.parentTitle || links[2]?.textContent?.trim() || '';
+      const durationMatch = /(\d+):(\d{2})/.exec(row.textContent || '');
+      const durationFromText = durationMatch
+        ? parseInt(durationMatch[1], 10) * 60 + parseInt(durationMatch[2], 10)
+        : 0;
+      const duration = fiberItem?.duration
+        ? Math.round(Number(fiberItem.duration) / 1000)
+        : durationFromText;
+
+      const pqItemId = Number(fiberItem?.playQueueItemID) || -(idx + 1);
+      if (!removeBtn && selectedItemID === null) {
+        selectedItemID = pqItemId;
+        selectedOffset = idx;
+      }
+
+      return {
+        playQueueItemID: pqItemId,
+        ratingKey: fiberItem?.ratingKey ? String(fiberItem.ratingKey) : '',
+        parentRatingKey: fiberItem?.parentRatingKey ? String(fiberItem.parentRatingKey) : '',
+        title,
+        artist,
+        album,
+        duration,
+        artworkUrl: img?.src || ''
+      };
+    });
+
+    const headerText = document.querySelector('[class*="AudioVideoPlayQueue-"]')?.textContent || '';
+    const countMatch = /(\d[\d,]*)\s+items?/i.exec(headerText);
+    const totalCount = countMatch
+      ? parseInt(countMatch[1].replace(/,/g, ''), 10)
+      : items.length;
+
+    return {
+      playQueueID: queueStore.queue?.playQueueID || null,
+      playQueueTitle: queueStore.queue?.playQueueTitle || 'Play Queue',
+      totalCount,
+      selectedItemID,
+      selectedOffset,
+      shuffled: queueStore.queue?.shuffled || false,
+      items
+    };
+  }
+
+  async function waitForQueueRows(timeoutMs = 600) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const rows = getRenderedQueueRows();
+      if (rows.length > 0) return rows;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return getRenderedQueueRows();
+  }
+
+  async function refreshPlayQueue(allowDomPeek = false) {
+    if (queueStore.lastQueueUrl) {
+      const fetched = await fetchPlayQueueFromStoredUrl();
+      if (fetched) return fetched;
+    }
+
+    if (findPlayQueueScroller()) {
+      const scraped = scrapePlayQueueFromDom();
+      if (scraped) {
+        queueStore.queue = scraped;
+        broadcastQueueUpdate();
+        return scraped;
+      }
+    }
+
+    if (allowDomPeek) {
+      const openBtn = findPlayQueueButton();
+      if (openBtn) {
+        openBtn.click();
+        await waitForQueueRows(600);
+        const scraped = scrapePlayQueueFromDom();
+        const minBtn = findMinimizePlayerButton();
+        if (minBtn) minBtn.click();
+        if (scraped) {
+          queueStore.queue = scraped;
+          broadcastQueueUpdate();
+          return scraped;
+        }
+      }
+    }
+
+    return queueStore.queue;
+  }
+
+  async function playQueueItem(payload) {
+    if (!payload) return false;
+    const wasClosed = !findPlayQueueScroller();
+    if (wasClosed) {
+      const openBtn = findPlayQueueButton();
+      if (!openBtn) return false;
+      openBtn.click();
+    }
+
+    const rows = await waitForQueueRows(700);
+    if (!rows || rows.length === 0) {
+      if (wasClosed) findMinimizePlayerButton()?.click();
+      return false;
+    }
+
+    let matchedRow = null;
+
+    // 1. Match by React fiber playQueueItemID
+    if (payload.playQueueItemID && payload.playQueueItemID > 0) {
+      for (const row of rows) {
+        const fiberItem = extractFiberItem(row);
+        if (fiberItem && Number(fiberItem.playQueueItemID) === Number(payload.playQueueItemID)) {
+          matchedRow = row;
+          break;
+        }
+      }
+    }
+
+    // 2. Match by title + artist/album text
+    if (!matchedRow && payload.title) {
+      const targetTitle = payload.title.trim().toLowerCase();
+      const targetArtist = (payload.artist || '').trim().toLowerCase();
+      for (const row of rows) {
+        const playBtn = row.querySelector(
+          'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
+        );
+        const label = (playBtn?.getAttribute('aria-label') || '')
+          .replace(/^Play\s+(Play\s+)?/i, '')
+          .trim()
+          .toLowerCase();
+        const firstLink = row.querySelector('a')?.textContent?.trim().toLowerCase() || '';
+        const titleMatches = label === targetTitle || firstLink === targetTitle;
+        if (!titleMatches) continue;
+        if (!targetArtist || (row.textContent || '').toLowerCase().includes(targetArtist)) {
+          matchedRow = row;
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback by index if rendered slice aligns with queueStore
+    if (
+      !matchedRow &&
+      Number.isInteger(payload.index) &&
+      payload.index >= 0 &&
+      payload.index < rows.length
+    ) {
+      matchedRow = rows[payload.index];
+    }
+
+    const targetPlayBtn = matchedRow?.querySelector(
+      'button[class*="MetadataPosterButtonCard-playButton-"], button[class*="PlayButton-playButton-"]'
+    );
+    if (!targetPlayBtn) {
+      if (wasClosed) findMinimizePlayerButton()?.click();
+      return false;
+    }
+
+    targetPlayBtn.click();
+    await new Promise((r) => setTimeout(r, 70));
+
+    if (wasClosed) {
+      findMinimizePlayerButton()?.click();
+    }
+
+    if (queueStore.queue && payload.playQueueItemID) {
+      queueStore.queue.selectedItemID = payload.playQueueItemID;
+      broadcastQueueUpdate();
+    }
+    scheduleQueueRefresh(400);
+    return true;
+  }
+
+  /**
    * Listen for action dispatches from the isolated content script
    */
   const onMessage = async (event) => {
@@ -479,6 +940,24 @@
           handled = true;
           break;
         }
+
+        case 'getQueue': {
+          result = queueStore.queue;
+          handled = Boolean(result);
+          break;
+        }
+
+        case 'refreshQueue': {
+          result = await refreshPlayQueue(Boolean(value));
+          handled = Boolean(result);
+          break;
+        }
+
+        case 'playQueueItem': {
+          handled = await playQueueItem(value);
+          result = queueStore.queue;
+          break;
+        }
       }
     } catch (err) {
       console.warn('[Playkeys Bridge] Action execution notice:', action, err);
@@ -501,6 +980,7 @@
 
   window.__PLAYKEYS_MAIN_BRIDGE_CLEANUP__ = () => {
     clearInterval(metaTimerId);
+    clearTimeout(queueRefreshTimer);
     window.removeEventListener('message', onMessage);
   };
 

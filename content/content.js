@@ -13,6 +13,7 @@
 
   // Cached state & metadata
   let bridgeMetadata = null;
+  let bridgeQueue = null;
   let lastBroadcastState = null;
   let attachedMediaElement = null;
   let attachedMediaHandler = null;
@@ -59,13 +60,23 @@
     if (event.data.type === 'METADATA_UPDATE') {
       bridgeMetadata = event.data.data || null;
       broadcastState(true);
+    } else if (event.data.type === 'QUEUE_UPDATE') {
+      bridgeQueue = event.data.data || null;
+      if (isExtensionContextValid()) {
+        chrome.runtime
+          .sendMessage({
+            type: 'PLEX_QUEUE_UPDATE',
+            queue: bridgeQueue
+          })
+          .catch(() => {});
+      }
     }
   });
 
   /**
-   * Dispatch action to main-bridge.js
+   * Dispatch action to main-bridge.js and resolve { handled, result }
    */
-  function dispatchToBridge(action, value = null) {
+  function dispatchToBridgeWithResult(action, value = null, timeoutMs = 600) {
     return new Promise((resolve) => {
       const requestId =
         typeof crypto !== 'undefined' && crypto.randomUUID
@@ -88,7 +99,10 @@
           }
           clearTimeout(timeoutId);
           window.removeEventListener('message', responseHandler);
-          resolve(event.data.handled);
+          resolve({
+            handled: Boolean(event.data.handled),
+            result: event.data.result ?? null
+          });
         }
       };
 
@@ -106,9 +120,17 @@
 
       timeoutId = setTimeout(() => {
         window.removeEventListener('message', responseHandler);
-        resolve(false);
-      }, 600);
+        resolve({ handled: false, result: null });
+      }, timeoutMs);
     });
+  }
+
+  /**
+   * Dispatch action to main-bridge.js
+   */
+  async function dispatchToBridge(action, value = null, timeoutMs = 600) {
+    const res = await dispatchToBridgeWithResult(action, value, timeoutMs);
+    return res.handled;
   }
 
   /**
@@ -798,6 +820,31 @@
         return { success: true, userRating: target };
       }
       return { success: false, error: 'Rating widget unavailable' };
+    },
+
+    async getQueue() {
+      const res = await dispatchToBridgeWithResult('getQueue', null, 800);
+      if (res.handled && res.result) {
+        bridgeQueue = res.result;
+      }
+      return { success: Boolean(bridgeQueue), queue: bridgeQueue };
+    },
+
+    async refreshQueue(allowDomPeek = false) {
+      const res = await dispatchToBridgeWithResult('refreshQueue', Boolean(allowDomPeek), 1500);
+      if (res.result) {
+        bridgeQueue = res.result;
+      }
+      return { success: Boolean(bridgeQueue), queue: bridgeQueue };
+    },
+
+    async playQueueItem(itemPayload) {
+      const res = await dispatchToBridgeWithResult('playQueueItem', itemPayload, 1800);
+      if (res.handled) {
+        setTimeout(() => broadcastState(true), 250);
+        return { success: true, queue: res.result || bridgeQueue };
+      }
+      return { success: false, error: 'Could not select queue item' };
     },
 
     getState() {
