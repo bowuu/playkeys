@@ -19,35 +19,35 @@
           </svg>
           <div class="brand-text">
             <h2>Playkeys</h2>
-            <span class="version-tag">for Plex Web &bull; v1.1.2</span>
+            <span class="version-tag">for Plex Web &bull; v1.1.3</span>
           </div>
         </div>
       </div>
 
-      <nav class="sidebar-nav">
-        <a href="#servers" class="nav-item active" data-tab="servers">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+      <nav class="sidebar-nav" aria-label="Settings sections">
+        <a href="#servers" class="nav-item active" data-tab="servers" aria-current="page">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <path d="M4 1h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 8h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1zm0 8h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1zM6 4h2v1H6V4zm0 8h2v1H6v-1zm0 8h2v1H6v-1z"/>
           </svg>
           Plex Servers
         </a>
         <a href="#preferences" class="nav-item" data-tab="preferences">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
           </svg>
-          Popup & Ratings
+          Popup &amp; Ratings
         </a>
         <a href="#shortcuts" class="nav-item" data-tab="shortcuts">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <path d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z"/>
           </svg>
           Shortcuts
         </a>
         <a href="#about" class="nav-item" data-tab="about">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
           </svg>
-          About & Privacy
+          About &amp; Privacy
         </a>
       </nav>
     </aside>
@@ -68,15 +68,16 @@
           
           <form id="addServerForm" class="add-server-form">
             <div class="input-row">
+              <label for="serverUrlInput" class="sr-only">Custom Plex server URL</label>
               <input type="url" id="serverUrlInput" placeholder="http://192.168.1.50:32400/web" required />
               <button type="submit" id="btnAddServer" class="btn-primary">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                   <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                 </svg>
                 Request Permission & Add
               </button>
             </div>
-            <div id="originNotice" class="feedback-msg hidden"></div>
+            <div id="originNotice" class="feedback-msg hidden" role="status" aria-live="polite"></div>
           </form>
         </div>
 
@@ -149,7 +150,7 @@
               <span class="mode-card-desc">Hide the rating row in the popup for a more compact player.</span>
             </label>
           </div>
-          <div id="prefsNotice" class="feedback-msg hidden"></div>
+          <div id="prefsNotice" class="feedback-msg hidden" role="status" aria-live="polite"></div>
         </div>
       </section>
 
@@ -171,45 +172,45 @@
               </tr>
             </thead>
             <tbody>
-              <tr>
+              <tr data-command="play_pause">
                 <td class="action-cell">Play / Pause</td>
-                <td><kbd>MediaPlayPause</kbd></td>
+                <td class="shortcut-cell"><kbd>MediaPlayPause</kbd></td>
                 <td><span class="scope-pill global">Global</span></td>
                 <td>Toggle playback in active Plex tab</td>
               </tr>
-              <tr>
+              <tr data-command="next_track">
                 <td class="action-cell">Next Track</td>
-                <td><kbd>MediaNextTrack</kbd></td>
+                <td class="shortcut-cell"><kbd>MediaNextTrack</kbd></td>
                 <td><span class="scope-pill global">Global</span></td>
                 <td>Skip to next item or chapter</td>
               </tr>
-              <tr>
+              <tr data-command="prev_track">
                 <td class="action-cell">Previous Track</td>
-                <td><kbd>MediaPrevTrack</kbd></td>
+                <td class="shortcut-cell"><kbd>MediaPrevTrack</kbd></td>
                 <td><span class="scope-pill global">Global</span></td>
                 <td>Previous item or rewind to start</td>
               </tr>
-              <tr>
+              <tr data-command="stop_playback">
                 <td class="action-cell">Stop Playback</td>
-                <td><kbd>MediaStop</kbd></td>
+                <td class="shortcut-cell"><kbd>MediaStop</kbd></td>
                 <td><span class="scope-pill global">Global</span></td>
                 <td>Stop playback and clear toolbar badge</td>
               </tr>
-              <tr>
+              <tr data-command="volume_up">
                 <td class="action-cell">Volume Up</td>
-                <td><span class="unassigned-key">Unassigned</span></td>
+                <td class="shortcut-cell"><span class="unassigned-key">Unassigned</span></td>
                 <td><span class="scope-pill in-chrome">Chrome</span></td>
                 <td>Increase volume by 5%</td>
               </tr>
-              <tr>
+              <tr data-command="volume_down">
                 <td class="action-cell">Volume Down</td>
-                <td><span class="unassigned-key">Unassigned</span></td>
+                <td class="shortcut-cell"><span class="unassigned-key">Unassigned</span></td>
                 <td><span class="scope-pill in-chrome">Chrome</span></td>
                 <td>Decrease volume by 5%</td>
               </tr>
-              <tr>
+              <tr data-command="toggle_mute">
                 <td class="action-cell">Toggle Mute</td>
-                <td><span class="unassigned-key">Unassigned</span></td>
+                <td class="shortcut-cell"><span class="unassigned-key">Unassigned</span></td>
                 <td><span class="scope-pill in-chrome">Chrome</span></td>
                 <td>Mute / Unmute audio output</td>
               </tr>
@@ -218,7 +219,7 @@
 
           <div class="table-footer">
             <p>Want to rebind these shortcuts or assign custom keys?</p>
-            <button id="btnOpenChromeShortcuts" class="btn-secondary">
+            <button type="button" id="btnOpenChromeShortcuts" class="btn-secondary">
               Open Chrome Shortcuts Settings
             </button>
           </div>

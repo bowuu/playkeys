@@ -16,8 +16,9 @@ const DYNAMIC_SCRIPT_MAIN_ID = 'playkeys-custom-origins-main';
 const DYNAMIC_SCRIPT_ISOLATED_ID = 'playkeys-custom-origins-isolated';
 const LEGACY_DYNAMIC_SCRIPT_ID = 'playkeys-custom-origins';
 
-// Serialized promise chain for toolbar badge updates to avoid race conditions
+// Serialized promise chains to avoid concurrent update races
 let badgeQueue = Promise.resolve();
+let dynamicScriptsQueue = Promise.resolve();
 
 // Badge appearance definitions
 const BADGE_COLORS = {
@@ -305,7 +306,7 @@ async function injectIntoAllOpenPlexTabs() {
   try {
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
-      if (tab.id && (await isConfiguredPlexUrl(tab.url))) {
+      if (tab.id && !tab.discarded && (await isConfiguredPlexUrl(tab.url))) {
         await ensureScriptsInjected(tab.id);
       }
     }
@@ -328,7 +329,7 @@ async function discoverBestPlexTab() {
   const tabs = await chrome.tabs.query({});
   const plexTabs = [];
   for (const tab of tabs) {
-    if (tab.id && (await isConfiguredPlexUrl(tab.url))) {
+    if (tab.id && !tab.discarded && (await isConfiguredPlexUrl(tab.url))) {
       plexTabs.push(tab);
     }
   }
@@ -383,16 +384,22 @@ async function dispatchPlayerAction(actionName, value = null) {
     return { success: false, error: 'No Plex tab found' };
   }
 
-  await ensureScriptsInjected(tab.id);
-
   try {
     return await chrome.tabs.sendMessage(tab.id, {
       action: actionName,
       value
     });
-  } catch (err) {
-    console.warn('[Playkeys Background] Action dispatch failed:', err);
-    return { success: false, error: err.message };
+  } catch {
+    await ensureScriptsInjected(tab.id);
+    try {
+      return await chrome.tabs.sendMessage(tab.id, {
+        action: actionName,
+        value
+      });
+    } catch (err) {
+      console.warn('[Playkeys Background] Action dispatch failed:', err);
+      return { success: false, error: err.message };
+    }
   }
 }
 
@@ -547,45 +554,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * Register dynamic MAIN and ISOLATED content scripts for granted custom origins
+ * Register dynamic MAIN and ISOLATED content scripts for granted custom origins (serialized)
  */
-async function updateDynamicContentScripts() {
-  const customOrigins = await getGrantedCustomOrigins();
-  if (!chrome.scripting || !chrome.scripting.registerContentScripts) {
-    return;
-  }
+function updateDynamicContentScripts() {
+  dynamicScriptsQueue = dynamicScriptsQueue
+    .then(async () => {
+      const customOrigins = await getGrantedCustomOrigins();
+      if (!chrome.scripting || !chrome.scripting.registerContentScripts) {
+        return;
+      }
 
-  try {
-    const idsToCheck = [DYNAMIC_SCRIPT_MAIN_ID, DYNAMIC_SCRIPT_ISOLATED_ID, LEGACY_DYNAMIC_SCRIPT_ID];
-    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: idsToCheck });
-    if (existing && existing.length > 0) {
-      await chrome.scripting.unregisterContentScripts({
-        ids: existing.map((item) => item.id)
-      });
-    }
-
-    if (customOrigins.length > 0) {
-      await chrome.scripting.registerContentScripts([
-        {
-          id: DYNAMIC_SCRIPT_MAIN_ID,
-          matches: customOrigins,
-          js: ['content/main-bridge.js'],
-          world: 'MAIN',
-          runAt: 'document_start'
-        },
-        {
-          id: DYNAMIC_SCRIPT_ISOLATED_ID,
-          matches: customOrigins,
-          js: ['content/content.js'],
-          world: 'ISOLATED',
-          runAt: 'document_idle'
+      try {
+        const idsToCheck = [DYNAMIC_SCRIPT_MAIN_ID, DYNAMIC_SCRIPT_ISOLATED_ID, LEGACY_DYNAMIC_SCRIPT_ID];
+        const existing = await chrome.scripting.getRegisteredContentScripts({ ids: idsToCheck });
+        if (existing && existing.length > 0) {
+          await chrome.scripting.unregisterContentScripts({
+            ids: existing.map((item) => item.id)
+          });
         }
-      ]);
-      console.log('[Playkeys Background] Dynamic origins registered:', customOrigins);
-    }
-  } catch (err) {
-    console.warn('[Playkeys Background] Dynamic script registration notice:', err);
-  }
+
+        if (customOrigins.length > 0) {
+          await chrome.scripting.registerContentScripts([
+            {
+              id: DYNAMIC_SCRIPT_MAIN_ID,
+              matches: customOrigins,
+              js: ['content/main-bridge.js'],
+              world: 'MAIN',
+              runAt: 'document_start'
+            },
+            {
+              id: DYNAMIC_SCRIPT_ISOLATED_ID,
+              matches: customOrigins,
+              js: ['content/content.js'],
+              world: 'ISOLATED',
+              runAt: 'document_idle'
+            }
+          ]);
+          console.log('[Playkeys Background] Dynamic origins registered:', customOrigins);
+        }
+      } catch (err) {
+        console.warn('[Playkeys Background] Dynamic script registration notice:', err);
+      }
+    })
+    .catch((err) => {
+      console.warn('[Playkeys Background] Dynamic script queue notice:', err);
+    });
+
+  return dynamicScriptsQueue;
 }
 
 /**

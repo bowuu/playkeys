@@ -206,6 +206,69 @@
     return Number.isFinite(val) ? val : 0;
   }
 
+  let pointerCaptureSpoofDepth = 0;
+  const spoofedCapturedPointers = new Set();
+  const nativeSetPointerCapture = Element.prototype.setPointerCapture;
+  const nativeReleasePointerCapture = Element.prototype.releasePointerCapture;
+  const nativeHasPointerCapture = Element.prototype.hasPointerCapture;
+
+  /**
+   * Temporarily spoof Element.prototype pointer-capture methods in a ref-counted scope
+   * so synthetic Radix/slider pointer drags work even when concurrent calls overlap.
+   */
+  async function withSpoofedPointerCapture(fn) {
+    if (pointerCaptureSpoofDepth === 0) {
+      Element.prototype.setPointerCapture = function (id) {
+        spoofedCapturedPointers.add(id);
+      };
+      Element.prototype.releasePointerCapture = function (id) {
+        spoofedCapturedPointers.delete(id);
+      };
+      Element.prototype.hasPointerCapture = function (id) {
+        return spoofedCapturedPointers.has(id) || nativeHasPointerCapture.call(this, id);
+      };
+    }
+    pointerCaptureSpoofDepth += 1;
+    try {
+      return await fn();
+    } finally {
+      pointerCaptureSpoofDepth = Math.max(0, pointerCaptureSpoofDepth - 1);
+      if (pointerCaptureSpoofDepth === 0) {
+        spoofedCapturedPointers.clear();
+        Element.prototype.setPointerCapture = nativeSetPointerCapture;
+        Element.prototype.releasePointerCapture = nativeReleasePointerCapture;
+        Element.prototype.hasPointerCapture = nativeHasPointerCapture;
+      }
+    }
+  }
+
+  function buildPointerInit(clientX, clientY, buttons = 1) {
+    return {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX,
+      clientY,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+      button: 0,
+      buttons
+    };
+  }
+
+  function buildMouseInit(clientX, clientY, buttons = 1) {
+    return {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX,
+      clientY,
+      button: 0,
+      buttons
+    };
+  }
+
   /**
    * Set Plex Web's 0..10 userRating via Radix Slider pointer coordinates or React fiber fallback
    */
@@ -224,34 +287,8 @@
       const clientX = rect.left + (clamped / 10) * rect.width;
       const clientY = rect.top + rect.height / 2;
 
-      const capturedPointers = new Set();
-      const origSetCapture = Element.prototype.setPointerCapture;
-      const origReleaseCapture = Element.prototype.releasePointerCapture;
-      const origHasCapture = Element.prototype.hasPointerCapture;
-
-      Element.prototype.setPointerCapture = function (id) {
-        capturedPointers.add(id);
-      };
-      Element.prototype.releasePointerCapture = function (id) {
-        capturedPointers.delete(id);
-      };
-      Element.prototype.hasPointerCapture = function (id) {
-        return capturedPointers.has(id) || origHasCapture.call(this, id);
-      };
-
-      try {
-        const common = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX,
-          clientY,
-          pointerId: 1,
-          pointerType: 'mouse',
-          isPrimary: true,
-          button: 0,
-          buttons: 1
-        };
+      await withSpoofedPointerCapture(async () => {
+        const common = buildPointerInit(clientX, clientY, 1);
         sliderRoot.dispatchEvent(new PointerEvent('pointerover', common));
         sliderRoot.dispatchEvent(new PointerEvent('pointerenter', { ...common, bubbles: false }));
         sliderRoot.dispatchEvent(new PointerEvent('pointerdown', common));
@@ -261,21 +298,8 @@
         await new Promise((r) => setTimeout(r, 35));
 
         sliderRoot.dispatchEvent(new PointerEvent('pointerup', { ...common, buttons: 0 }));
-        sliderRoot.dispatchEvent(
-          new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX,
-            clientY,
-            button: 0
-          })
-        );
-      } finally {
-        Element.prototype.setPointerCapture = origSetCapture;
-        Element.prototype.releasePointerCapture = origReleaseCapture;
-        Element.prototype.hasPointerCapture = origHasCapture;
-      }
+        sliderRoot.dispatchEvent(new MouseEvent('click', buildMouseInit(clientX, clientY, 0)));
+      });
 
       if (getCurrentRating() === clamped) {
         return true;
@@ -345,43 +369,9 @@
       clientY = Math.max(rect.top + 0.5, Math.min(rect.bottom - 0.5, clientY));
     }
 
-    const capturedPointers = new Set();
-    const origSetCapture = Element.prototype.setPointerCapture;
-    const origReleaseCapture = Element.prototype.releasePointerCapture;
-    const origHasCapture = Element.prototype.hasPointerCapture;
-
-    Element.prototype.setPointerCapture = function (id) {
-      capturedPointers.add(id);
-    };
-    Element.prototype.releasePointerCapture = function (id) {
-      capturedPointers.delete(id);
-    };
-    Element.prototype.hasPointerCapture = function (id) {
-      return capturedPointers.has(id) || origHasCapture.call(this, id);
-    };
-
-    try {
-      const ptrDown = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY,
-        pointerId: 1,
-        pointerType: 'mouse',
-        isPrimary: true,
-        button: 0,
-        buttons: 1
-      };
-      const mouseDown = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY,
-        button: 0,
-        buttons: 1
-      };
+    await withSpoofedPointerCapture(async () => {
+      const ptrDown = buildPointerInit(clientX, clientY, 1);
+      const mouseDown = buildMouseInit(clientX, clientY, 1);
 
       slider.dispatchEvent(new PointerEvent('pointerover', ptrDown));
       slider.dispatchEvent(new PointerEvent('pointerenter', { ...ptrDown, bubbles: false }));
@@ -396,11 +386,7 @@
       slider.dispatchEvent(new MouseEvent('mousemove', mouseDown));
       slider.dispatchEvent(new PointerEvent('pointerup', { ...ptrDown, buttons: 0 }));
       slider.dispatchEvent(new MouseEvent('mouseup', { ...mouseDown, buttons: 0 }));
-    } finally {
-      Element.prototype.setPointerCapture = origSetCapture;
-      Element.prototype.releasePointerCapture = origReleaseCapture;
-      Element.prototype.hasPointerCapture = origHasCapture;
-    }
+    });
 
     await new Promise((r) => setTimeout(r, 25));
 
@@ -645,8 +631,11 @@
       window.fetch = async function (...args) {
         const res = await origFetch.apply(this, args);
         try {
-          const reqUrl = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-          if (/\/playQueues(\/|\?|$)/i.test(reqUrl)) {
+          const reqUrl =
+            typeof args[0] === 'string'
+              ? args[0]
+              : args[0]?.url || args[0]?.href || '';
+          if (res.ok && /\/playQueues(\/|\?|$)/i.test(reqUrl)) {
             res
               .clone()
               .json()
@@ -764,27 +753,8 @@
     const clientX = rect.width > 0 ? rect.left + rect.width / 2 : 0;
     const clientY = rect.height > 0 ? rect.top + rect.height / 2 : 0;
 
-    const ptrInit = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX,
-      clientY,
-      pointerId: 1,
-      pointerType: 'mouse',
-      isPrimary: true,
-      button: 0,
-      buttons: 1
-    };
-    const mouseInit = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX,
-      clientY,
-      button: 0,
-      buttons: 1
-    };
+    const ptrInit = buildPointerInit(clientX, clientY, 1);
+    const mouseInit = buildMouseInit(clientX, clientY, 1);
 
     targetEl.dispatchEvent(new PointerEvent('pointerover', ptrInit));
     targetEl.dispatchEvent(new PointerEvent('pointerenter', { ...ptrInit, bubbles: false }));
@@ -998,6 +968,13 @@
 
       const pqEntities = state?.entities?.playQueueItems || {};
       const metaEntities = state?.entities?.metadataItems || {};
+      const mediaEntities = state?.entities?.media || {};
+      const existingById = new Map();
+      if (Array.isArray(queueStore.queue?.items)) {
+        for (const prev of queueStore.queue.items) {
+          if (prev?.playQueueItemID) existingById.set(Number(prev.playQueueItemID), prev);
+        }
+      }
 
       const items = pqItems
         .map((entityId) => {
@@ -1005,15 +982,25 @@
           const meta = pqRec?.metadataItem ? metaEntities[pqRec.metadataItem] : null;
           if (!pqRec && !meta) return null;
           const thumbPath = meta?.thumb || meta?.parentThumb || meta?.grandparentThumb || '';
+          const pqItemId = Number(pqRec?.playQueueItemID) || null;
+          const prev = pqItemId ? existingById.get(pqItemId) : null;
+          const mediaRef = Array.isArray(meta?.media) ? mediaEntities[meta.media[0]] : null;
+          const mediaRaw = Array.isArray(meta?.Media) ? meta.Media[0] : null;
+          const audioCodecRaw = mediaRef?.audioCodec || mediaRaw?.audioCodec || '';
+          const videoCodecRaw = mediaRef?.videoCodec || mediaRaw?.videoCodec || '';
+          const bitrateVal = Number(mediaRef?.bitrate || mediaRaw?.bitrate) || 0;
           return {
-            playQueueItemID: Number(pqRec?.playQueueItemID) || null,
+            playQueueItemID: pqItemId,
             ratingKey: meta?.ratingKey ? String(meta.ratingKey) : '',
             parentRatingKey: meta?.parentRatingKey ? String(meta.parentRatingKey) : '',
             title: meta?.title || 'Unknown Track',
             artist: meta?.originalTitle || meta?.grandparentTitle || '',
             album: meta?.parentTitle || '',
             duration: Math.round((Number(meta?.duration) || 0) / 1000),
-            artworkUrl: buildQueueArtworkUrl(thumbPath, serverOrigin, token)
+            artworkUrl: buildQueueArtworkUrl(thumbPath, serverOrigin, token),
+            audioCodec: audioCodecRaw ? String(audioCodecRaw).toUpperCase() : prev?.audioCodec || '',
+            videoCodec: videoCodecRaw ? String(videoCodecRaw).toUpperCase() : prev?.videoCodec || '',
+            bitrate: bitrateVal || prev?.bitrate || 0
           };
         })
         .filter(Boolean);

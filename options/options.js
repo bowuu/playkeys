@@ -30,25 +30,46 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnOpenChromeShortcuts = document.getElementById('btnOpenChromeShortcuts');
 
   /**
-   * Tab Navigation handler
+   * Tab Navigation handler (supports URL hash & aria-current)
    */
+  function activateTab(tabName) {
+    const targetTab = Object.prototype.hasOwnProperty.call(sections, tabName) ? tabName : 'servers';
+
+    navItems.forEach((nav) => {
+      const isMatch = nav.getAttribute('data-tab') === targetTab;
+      nav.classList.toggle('active', isMatch);
+      if (isMatch) {
+        nav.setAttribute('aria-current', 'page');
+      } else {
+        nav.removeAttribute('aria-current');
+      }
+    });
+
+    Object.keys(sections).forEach((key) => {
+      sections[key].classList.toggle('hidden', key !== targetTab);
+    });
+  }
+
   navItems.forEach((item) => {
     item.addEventListener('click', (e) => {
       e.preventDefault();
       const targetTab = item.getAttribute('data-tab');
-
-      navItems.forEach((nav) => nav.classList.remove('active'));
-      item.classList.add('active');
-
-      Object.keys(sections).forEach((key) => {
-        if (key === targetTab) {
-          sections[key].classList.remove('hidden');
-        } else {
-          sections[key].classList.add('hidden');
-        }
-      });
+      activateTab(targetTab);
+      if (history.replaceState) {
+        history.replaceState(null, '', `#${targetTab}`);
+      }
     });
   });
+
+  window.addEventListener('hashchange', () => {
+    const hashTab = window.location.hash.replace(/^#/, '');
+    if (hashTab) activateTab(hashTab);
+  });
+
+  const initialTab = window.location.hash.replace(/^#/, '');
+  if (initialTab) {
+    activateTab(initialTab);
+  }
 
   /**
    * Show feedback message
@@ -87,27 +108,60 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const itemEl = document.createElement('div');
         itemEl.className = 'server-item';
-        itemEl.innerHTML = `
-          <div class="server-info">
-            <div class="server-name">${escapeHtml(server.name || server.displayName)}</div>
-            <div class="server-pattern">${escapeHtml(server.pattern)} &bull; <span style="opacity:0.8">${escapeHtml(server.displayUrl)}</span></div>
-          </div>
-          <div class="server-badges">
-            <span class="status-tag ${hasPermission ? 'granted-tag' : 'default-tag'}">
-              ${hasPermission ? 'Authorized' : 'Permission Revoked'}
-            </span>
-            <button class="btn-remove" data-id="${escapeHtml(server.id)}" title="Remove server and revoke permission" aria-label="Remove server">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-              </svg>
-            </button>
-          </div>
-        `;
 
-        itemEl.querySelector('.btn-remove').addEventListener('click', () => {
+        const infoEl = document.createElement('div');
+        infoEl.className = 'server-info';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'server-name';
+        nameEl.textContent = server.name || server.displayName || '';
+
+        const patternEl = document.createElement('div');
+        patternEl.className = 'server-pattern';
+        patternEl.appendChild(document.createTextNode(`${server.pattern} \u2022 `));
+        const urlSpan = document.createElement('span');
+        urlSpan.style.opacity = '0.8';
+        urlSpan.textContent = server.displayUrl || '';
+        patternEl.appendChild(urlSpan);
+
+        infoEl.appendChild(nameEl);
+        infoEl.appendChild(patternEl);
+
+        const badgesEl = document.createElement('div');
+        badgesEl.className = 'server-badges';
+
+        const statusEl = document.createElement('span');
+        statusEl.className = `status-tag ${hasPermission ? 'granted-tag' : 'default-tag'}`;
+        statusEl.textContent = hasPermission ? 'Authorized' : 'Permission Revoked';
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn-remove';
+        removeBtn.dataset.id = server.id || '';
+        removeBtn.title = 'Remove server and revoke permission';
+        removeBtn.setAttribute('aria-label', `Remove ${server.displayName || 'server'}`);
+
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('width', '16');
+        svg.setAttribute('height', '16');
+        svg.setAttribute('fill', 'currentColor');
+        const path = document.createElementNS(svgNS, 'path');
+        path.setAttribute('d', 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z');
+        svg.appendChild(path);
+        removeBtn.appendChild(svg);
+
+        removeBtn.addEventListener('click', () => {
           removeServer(server);
         });
 
+        badgesEl.appendChild(statusEl);
+        badgesEl.appendChild(removeBtn);
+
+        itemEl.appendChild(infoEl);
+        itemEl.appendChild(badgesEl);
         customServerList.appendChild(itemEl);
       }
     } catch (err) {
@@ -200,18 +254,39 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
   });
 
-  function escapeHtml(str) {
-    if (!str) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+  /**
+   * Populate shortcuts table with live keybindings from chrome.commands
+   */
+  async function loadShortcuts() {
+    if (!chrome.commands?.getAll) return;
+    try {
+      const commands = await chrome.commands.getAll();
+      for (const cmd of commands) {
+        const row = document.querySelector(`tr[data-command="${CSS.escape(cmd.name)}"]`);
+        if (!row) continue;
+        const cell = row.querySelector('.shortcut-cell');
+        if (!cell) continue;
+        cell.replaceChildren();
+        if (cmd.shortcut) {
+          const kbd = document.createElement('kbd');
+          kbd.textContent = cmd.shortcut;
+          cell.appendChild(kbd);
+        } else {
+          const unassigned = document.createElement('span');
+          unassigned.className = 'unassigned-key';
+          unassigned.textContent = 'Unassigned';
+          cell.appendChild(unassigned);
+        }
+      }
+    } catch (err) {
+      console.warn('[Playkeys Options] Shortcuts load error:', err);
+    }
   }
 
   // Initial load
   loadServers();
   loadPreferences();
+  loadShortcuts();
 
   /**
    * Load and bind Popup & Rating Preferences

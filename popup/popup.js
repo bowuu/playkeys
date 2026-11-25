@@ -150,6 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
     starRatingRow.setAttribute('aria-valuenow', String(val));
+    starRatingRow.setAttribute('aria-valuetext', val > 0 ? `${formatRatingLabel(val)} stars` : 'Unrated');
   }
 
   /**
@@ -184,8 +185,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ratingMode === 'thumbs') {
       starRatingRow.classList.add('hidden');
       thumbsRatingRow.classList.remove('hidden');
-      btnThumbUp.classList.toggle('active', actualVal >= 7);
-      btnThumbDown.classList.toggle('active', actualVal >= 1 && actualVal <= 4);
+      const isLiked = actualVal >= 7;
+      const isDisliked = actualVal >= 1 && actualVal <= 4;
+      btnThumbUp.classList.toggle('active', isLiked);
+      btnThumbUp.setAttribute('aria-pressed', String(isLiked));
+      btnThumbDown.classList.toggle('active', isDisliked);
+      btnThumbDown.setAttribute('aria-pressed', String(isDisliked));
       ratingValueLabel.textContent = formatRatingLabel(actualVal);
     } else {
       thumbsRatingRow.classList.add('hidden');
@@ -354,8 +359,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    btnShuffle.classList.toggle('active', Boolean(state.isShuffle));
+    const isShuffle = Boolean(state.isShuffle);
+    btnShuffle.classList.toggle('active', isShuffle);
+    btnShuffle.setAttribute('aria-pressed', String(isShuffle));
 
+    const isRepeatActive = state.repeatMode === 'one' || state.repeatMode === 'all';
+    btnRepeat.setAttribute('aria-pressed', String(isRepeatActive));
     if (state.repeatMode === 'one') {
       btnRepeat.classList.add('active');
       repeatBadge.classList.remove('hidden');
@@ -372,6 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const volPercent = Math.round((state.volume ?? 1) * 100);
       const isMuted = !!state.isMuted || volPercent === 0;
       syncVolumeIcons(isMuted);
+      btnMute.setAttribute('aria-pressed', String(isMuted));
 
       if (isMuted) {
         volumeSlider.value = 0;
@@ -472,6 +482,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
       e.preventDefault();
       commitRating(Math.max(0, current - step));
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      commitRating(0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      commitRating(10);
     }
   });
 
@@ -513,8 +529,10 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   window.addEventListener('pointerup', endScrubbing);
+  window.addEventListener('pointercancel', endScrubbing);
   window.addEventListener('mouseup', endScrubbing);
   window.addEventListener('touchend', endScrubbing);
+  window.addEventListener('blur', endScrubbing);
 
   // Handle Controls Click Events
   async function dispatchAndRefresh(action, delayMs = 180) {
@@ -591,8 +609,10 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   window.addEventListener('pointerup', endVolumeAdjust);
+  window.addEventListener('pointercancel', endVolumeAdjust);
   window.addEventListener('mouseup', endVolumeAdjust);
   window.addEventListener('touchend', endVolumeAdjust);
+  window.addEventListener('blur', endVolumeAdjust);
 
   // Quick One-Click Connect for Detected Local Server
   btnGrantDetected.addEventListener('click', async () => {
@@ -636,8 +656,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !volumePopover.classList.contains('hidden')) {
+        const wasFocusedInside = headerVolumeControl.contains(document.activeElement);
         setVolumePopoverOpen(false);
+        if (wasFocusedInside) {
+          btnVolumeTrigger.focus();
+        }
       }
     });
   }
@@ -657,6 +681,23 @@ document.addEventListener('DOMContentLoaded', () => {
     window.close();
   });
 
+  function createMusicNoteSvg() {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'currentColor');
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute(
+      'd',
+      'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z'
+    );
+    svg.appendChild(path);
+    return svg;
+  }
+
   /**
    * Switch between Player and Queue tabs
    */
@@ -670,8 +711,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     tabBtnPlayer.classList.toggle('active', !isQueue);
     tabBtnPlayer.setAttribute('aria-selected', String(!isQueue));
+    tabBtnPlayer.setAttribute('tabindex', isQueue ? '-1' : '0');
     tabBtnQueue.classList.toggle('active', isQueue);
     tabBtnQueue.setAttribute('aria-selected', String(isQueue));
+    tabBtnQueue.setAttribute('tabindex', isQueue ? '0' : '-1');
 
     tabPlayerPanel.classList.toggle('hidden', isQueue);
     tabQueuePanel.classList.toggle('hidden', !isQueue);
@@ -736,6 +779,9 @@ document.addEventListener('DOMContentLoaded', () => {
       rowBtn.className = `queue-item${isSelected ? ' active' : ''}`;
       rowBtn.dataset.itemId = String(item.playQueueItemID);
       rowBtn.title = `Play ${item.title}`;
+      if (isSelected) {
+        rowBtn.setAttribute('aria-current', 'true');
+      }
 
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 'queue-thumb';
@@ -745,13 +791,11 @@ document.addEventListener('DOMContentLoaded', () => {
         img.alt = '';
         img.loading = 'lazy';
         img.onerror = () => {
-          thumbWrap.innerHTML =
-            '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
+          thumbWrap.replaceChildren(createMusicNoteSvg());
         };
         thumbWrap.appendChild(img);
       } else {
-        thumbWrap.innerHTML =
-          '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
+        thumbWrap.appendChild(createMusicNoteSvg());
       }
 
       const info = document.createElement('div');
@@ -843,6 +887,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   tabBtnPlayer.addEventListener('click', () => switchViewTab('player'));
   tabBtnQueue.addEventListener('click', () => switchViewTab('queue'));
+  [tabBtnPlayer, tabBtnQueue].forEach((tabBtn) => {
+    tabBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const nextTab = tabBtn === tabBtnPlayer ? 'queue' : 'player';
+        switchViewTab(nextTab);
+        (nextTab === 'queue' ? tabBtnQueue : tabBtnPlayer).focus();
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        switchViewTab('player');
+        tabBtnPlayer.focus();
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        switchViewTab('queue');
+        tabBtnQueue.focus();
+      }
+    });
+  });
   btnRefreshQueue.addEventListener('click', async () => {
     btnRefreshQueue.disabled = true;
     btnRefreshQueue.classList.add('spinning');

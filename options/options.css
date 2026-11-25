@@ -14,7 +14,7 @@
   
   --text-primary: #ffffff;
   --text-secondary: #a3a6b2;
-  --text-muted: #6f7380;
+  --text-muted: #8e93a4;
   
   --border-color: rgba(255, 255, 255, 0.08);
   --border-active: rgba(229, 160, 13, 0.4);
@@ -524,4 +524,29 @@ kbd {
 
 .mode-card input[type="radio"] {
   accent-color: var(--plex-amber);
+}
+
+.mode-card:focus-within {
+  border-color: var(--plex-amber);
+  box-shadow: 0 0 0 2px var(--plex-amber-glow);
+}
+
+.nav-item:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-remove:focus-visible {
+  outline: 2px solid var(--plex-amber);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

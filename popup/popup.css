@@ -13,7 +13,7 @@
   
   --text-primary: #ffffff;
   --text-secondary: #a0a2aa;
-  --text-muted: #6c707d;
+  --text-muted: #8e93a4;
   
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-active: rgba(229, 160, 13, 0.4);
@@ -894,4 +894,19 @@ body {
 /* Helpers */
 .hidden {
   display: none !important;
+}
+
+.icon-btn:focus-visible,
+.btn-banner-action:focus-visible,
+.view-tab:focus-visible,
+.queue-item:focus-visible,
+.star-rating-row:focus-visible,
+.thumb-btn:focus-visible,
+.seek-slider:focus-visible,
+.control-btn:focus-visible,
+.volume-slider:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible {
+  outline: 2px solid var(--plex-amber);
+  outline-offset: 2px;
 }
