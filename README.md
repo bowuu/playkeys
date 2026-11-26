@@ -19,13 +19,13 @@ A Chrome extension that adds global media keys, playback status badges, and a po
 
 ## Screenshots
 
-![Playkeys for Plex Web in Action](docs/images/cws-01-plex-web-in-action.png)
-
-![Playkeys Player and Play Queue](docs/images/cws-02-player-and-queue.png)
-
 <p align="center">
   <img src="docs/images/cws-small-promo-440x280.png" alt="Playkeys for Plex Web" width="440" />
 </p>
+
+![Playkeys Player and Play Queue](docs/images/cws-02-player-and-queue.png)
+
+![Playkeys for Plex Web in Action](docs/images/cws-01-plex-web-in-action.png)
 
 ---
 

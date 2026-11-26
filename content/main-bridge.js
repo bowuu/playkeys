@@ -464,6 +464,17 @@
     const items = metadataList.map((item) => {
       const thumbPath = item.thumb || item.parentThumb || item.grandparentThumb || '';
       const media0 = Array.isArray(item.Media) ? item.Media[0] : null;
+      const part0 = Array.isArray(media0?.Part) ? media0.Part[0] : null;
+      const audioStream = Array.isArray(part0?.Stream)
+        ? part0.Stream.find((s) => Number(s.streamType) === 2)
+        : null;
+      let bitrate = Number(media0?.bitrate) || Number(audioStream?.bitrate) || 0;
+      if (!bitrate && part0?.size) {
+        const durationMs = Number(item.duration) || Number(media0?.duration) || 0;
+        if (durationMs > 0) {
+          bitrate = Math.round((Number(part0.size) * 8) / durationMs);
+        }
+      }
       return {
         playQueueItemID: Number(item.playQueueItemID) || null,
         ratingKey: item.ratingKey ? String(item.ratingKey) : '',
@@ -475,7 +486,7 @@
         artworkUrl: buildQueueArtworkUrl(thumbPath, serverOrigin, token),
         audioCodec: media0?.audioCodec ? String(media0.audioCodec).toUpperCase() : '',
         videoCodec: media0?.videoCodec ? String(media0.videoCodec).toUpperCase() : '',
-        bitrate: Number(media0?.bitrate) || 0
+        bitrate
       };
     });
 
