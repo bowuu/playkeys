@@ -135,12 +135,14 @@
         </div>
       </div>
 
-      <!-- Single-Row Control Layout: Shuffle, Prev, Play/Pause, Next, Repeat -->
+      <!-- Single-Row Control Layout: Repeat, Prev, Play/Pause, Next, Shuffle -->
       <div class="single-row-controls">
-        <!-- Shuffle -->
-        <button type="button" id="btnShuffle" class="control-btn toggle-btn" title="Toggle Shuffle" aria-label="Toggle Shuffle" aria-pressed="false">
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-            <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+        <!-- Repeat -->
+        <button type="button" id="btnRepeat" class="control-btn toggle-btn" title="Toggle Repeat" aria-label="Toggle Repeat" aria-pressed="false">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13.5 6H17.5A2.5 2.5 0 0 1 20 8.5V15.5A2.5 2.5 0 0 1 17.5 18H6.5A2.5 2.5 0 0 1 4 15.5V8.5A2.5 2.5 0 0 1 6.5 6H10" />
+            <path d="M8.25 3.75L10.5 6L8.25 8.25" />
+            <path id="repeatOneGlyph" class="hidden" d="M11.5 10.5L13 9.5V14.5" />
           </svg>
         </button>
 
@@ -170,12 +172,14 @@
           </svg>
         </button>
 
-        <!-- Repeat -->
-        <button type="button" id="btnRepeat" class="control-btn toggle-btn" title="Toggle Repeat" aria-label="Toggle Repeat" aria-pressed="false">
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+        <!-- Shuffle -->
+        <button type="button" id="btnShuffle" class="control-btn toggle-btn" title="Toggle Shuffle" aria-label="Toggle Shuffle" aria-pressed="false">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7H6.5C10.5 7 13.5 17 17.5 17H20" />
+            <path d="M4 17H6.5C10.5 17 13.5 7 17.5 7H20" />
+            <path d="M17.25 4.5L20 7L17.25 9.5" />
+            <path d="M17.25 14.5L20 17L17.25 19.5" />
           </svg>
-          <span id="repeatBadge" class="repeat-mode-badge hidden">1</span>
         </button>
       </div>
       </div>

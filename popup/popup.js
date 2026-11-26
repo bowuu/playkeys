@@ -54,7 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const iconPause = document.getElementById('iconPause');
   const btnNext = document.getElementById('btnNext');
   const btnRepeat = document.getElementById('btnRepeat');
-  const repeatBadge = document.getElementById('repeatBadge');
+  const repeatOneGlyph = document.getElementById('repeatOneGlyph');
 
   // Volume
   const btnMute = document.getElementById('btnMute');
@@ -365,17 +365,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const isRepeatActive = state.repeatMode === 'one' || state.repeatMode === 'all';
     btnRepeat.setAttribute('aria-pressed', String(isRepeatActive));
-    if (state.repeatMode === 'one') {
-      btnRepeat.classList.add('active');
-      repeatBadge.classList.remove('hidden');
-      repeatBadge.textContent = '1';
-    } else if (state.repeatMode === 'all') {
-      btnRepeat.classList.add('active');
-      repeatBadge.classList.add('hidden');
-    } else {
-      btnRepeat.classList.remove('active');
-      repeatBadge.classList.add('hidden');
-    }
+    btnRepeat.classList.toggle('active', isRepeatActive);
+    repeatOneGlyph.classList.toggle('hidden', state.repeatMode !== 'one');
 
     if (!isUserAdjustingVolume && Date.now() >= volumeLockUntil) {
       const volPercent = Math.round((state.volume ?? 1) * 100);
