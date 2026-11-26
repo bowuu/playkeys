@@ -1,8 +1,6 @@
 # Playkeys for Plex Web
 
-[![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?style=flat-square&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/playkeys-for-plex-web/pmkoebhamaccefjlpmjgnfckibhmfdpa)
-[![Manifest V3](https://img.shields.io/badge/Manifest-V3-orange?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/intro/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Available in the Chrome Web Store](https://img.shields.io/badge/Available%20in%20the-Chrome%20Web%20Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/playkeys-for-plex-web/pmkoebhamaccefjlpmjgnfckibhmfdpa)
 
 A Chrome extension that adds global media keys, playback status badges, and a popup controller for Plex Web (`app.plex.tv`) and self-hosted Plex servers.
 
@@ -97,3 +95,6 @@ Plex is a registered trademark of Plex, Inc. Playkeys is an independent open-sou
 ## License
 
 [MIT](LICENSE)
+
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-orange?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/intro/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
