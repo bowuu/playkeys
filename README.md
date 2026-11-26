@@ -28,8 +28,6 @@ A Chrome extension that adds global media keys, playback status badges, and a po
 
 ![Playkeys Player and Play Queue](docs/images/cws-02-player-and-queue.png)
 
-![Playkeys for Plex Web in Action](docs/images/cws-01-plex-web-in-action.png)
-
 ---
 
 ## Keyboard Shortcuts
