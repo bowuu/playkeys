@@ -1,6 +1,8 @@
 # Playkeys for Plex Web
 
-[![Available in the Chrome Web Store](https://img.shields.io/badge/Available%20in%20the-Chrome%20Web%20Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/playkeys-for-plex-web/pmkoebhamaccefjlpmjgnfckibhmfdpa)
+<a href="https://chromewebstore.google.com/detail/playkeys-for-plex-web/pmkoebhamaccefjlpmjgnfckibhmfdpa">
+  <img src="https://developer.chrome.com/static/docs/webstore/branding/image/google-compatible-product-a5b88d75b90ea_480.png" alt="Available in the Chrome Web Store" width="220" />
+</a>
 
 A Chrome extension that adds global media keys, playback status badges, and a popup controller for Plex Web (`app.plex.tv`) and self-hosted Plex servers.
 
