@@ -31,7 +31,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackTitle = document.getElementById('trackTitle');
   const trackArtist = document.getElementById('trackArtist');
   const trackAlbum = document.getElementById('trackAlbum');
-  const audioQualityBadge = document.getElementById('audioQualityBadge');
+  const qualityLeft = document.getElementById('qualityLeft');
+  const qualityRight = document.getElementById('qualityRight');
 
   // Rating Controls
   const ratingSection = document.getElementById('ratingSection');
@@ -39,7 +40,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const thumbsRatingRow = document.getElementById('thumbsRatingRow');
   const btnThumbDown = document.getElementById('btnThumbDown');
   const btnThumbUp = document.getElementById('btnThumbUp');
-  const ratingValueLabel = document.getElementById('ratingValueLabel');
 
   // Timeline
   const currentTimeEl = document.getElementById('currentTime');
@@ -171,7 +171,10 @@ document.addEventListener('DOMContentLoaded', () => {
    * Render rating section visibility and controls
    */
   function renderRating(state) {
-    if (ratingMode === 'off' || !state || !state.canRate) {
+    const hasQuality = Boolean(qualityLeft.textContent || qualityRight.textContent);
+    const canShowRating = ratingMode !== 'off' && Boolean(state && state.canRate);
+
+    if (!canShowRating && !hasQuality) {
       ratingSection.classList.add('hidden');
       playerCard.classList.add('compact-panel');
       return;
@@ -179,6 +182,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     ratingSection.classList.remove('hidden');
     playerCard.classList.remove('compact-panel');
+
+    if (!canShowRating) {
+      starRatingRow.classList.add('hidden');
+      thumbsRatingRow.classList.add('hidden');
+      return;
+    }
+
     const actualVal = Number.isFinite(state.userRating) ? state.userRating : 0;
     const displayVal = hoverRating !== null ? hoverRating : actualVal;
 
@@ -191,12 +201,12 @@ document.addEventListener('DOMContentLoaded', () => {
       btnThumbUp.setAttribute('aria-pressed', String(isLiked));
       btnThumbDown.classList.toggle('active', isDisliked);
       btnThumbDown.setAttribute('aria-pressed', String(isDisliked));
-      ratingValueLabel.textContent = formatRatingLabel(actualVal);
+      thumbsRatingRow.title = formatRatingLabel(actualVal);
     } else {
       thumbsRatingRow.classList.add('hidden');
       starRatingRow.classList.remove('hidden');
       paintStars(displayVal);
-      ratingValueLabel.textContent = formatRatingLabel(displayVal);
+      starRatingRow.title = formatRatingLabel(displayVal);
     }
   }
 
@@ -300,7 +310,8 @@ document.addEventListener('DOMContentLoaded', () => {
       trackTitle.textContent = 'Plex Connected';
       trackArtist.textContent = 'Waiting for media to play...';
       trackAlbum.textContent = '';
-      audioQualityBadge.classList.add('hidden');
+      qualityLeft.textContent = '';
+      qualityRight.textContent = '';
       updateArtwork('');
       renderRating(null);
       return;
@@ -310,24 +321,19 @@ document.addEventListener('DOMContentLoaded', () => {
     trackArtist.textContent = state.artist || (state.isPlaying ? 'Now Playing' : 'Plex Player');
     trackAlbum.textContent = state.album || '';
 
-    let qualityText = '';
+    let leftText = '';
+    let rightText = '';
     if (state.hasMedia) {
       if (state.videoCodec && state.audioCodec) {
-        qualityText = `${state.videoCodec} • ${state.audioCodec}`;
-      } else if (state.audioCodec && state.bitrate > 0) {
-        qualityText = `${state.audioCodec} • ${state.bitrate} kbps`;
-      } else if (state.audioCodec) {
-        qualityText = state.audioCodec;
-      } else if (state.bitrate > 0) {
-        qualityText = `${state.bitrate} kbps`;
+        leftText = state.videoCodec;
+        rightText = state.audioCodec;
+      } else {
+        if (state.audioCodec) leftText = state.audioCodec;
+        if (state.bitrate > 0) rightText = `${state.bitrate} kbps`;
       }
     }
-    if (qualityText) {
-      audioQualityBadge.textContent = qualityText;
-      audioQualityBadge.classList.remove('hidden');
-    } else {
-      audioQualityBadge.classList.add('hidden');
-    }
+    qualityLeft.textContent = leftText;
+    qualityRight.textContent = rightText;
 
     updateArtwork(state.artworkUrl);
     renderRating(state);
