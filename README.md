@@ -12,8 +12,6 @@
 
 A Chrome extension that adds global media keys, playback status badges, and a popup controller for Plex Web (`app.plex.tv`) and self-hosted Plex servers.
 
----
-
 ## Features
 
 - **Global media shortcuts:** Control playback with hardware media keys (`Play/Pause`, `Next`, `Previous`, `Stop`) or custom shortcuts from anywhere in your OS.
@@ -22,13 +20,9 @@ A Chrome extension that adds global media keys, playback status badges, and a po
 - **Custom server support:** Connect local or self-hosted Plex Media Server instances on demand.
 - **Lightweight & private:** Manifest V3, no external dependencies or build steps, and zero telemetry.
 
----
-
 ## Screenshots
 
 ![Playkeys Player and Play Queue](docs/images/cws-02-player-and-queue.png)
-
----
 
 ## Keyboard Shortcuts
 
@@ -43,8 +37,6 @@ A Chrome extension that adds global media keys, playback status badges, and a po
 | **Toggle Mute** | *Unassigned* | In Chrome / Global | Mute / unmute audio |
 
 Shortcuts (including optional volume keys, due to Chrome's 4-default-shortcut limit) can be customized at `chrome://extensions/shortcuts`.
-
----
 
 ## Installation
 
@@ -63,8 +55,6 @@ Install directly from the [Chrome Web Store](https://chromewebstore.google.com/d
 4. Click **Load unpacked** and select the `playkeys` directory.
 5. Pin Playkeys to your toolbar for easy access.
 
----
-
 ## Custom Servers
 
 By default, Playkeys requests permissions only for `https://app.plex.tv/*`.
@@ -74,25 +64,17 @@ To connect a local or self-hosted server:
 2. Enter your server address (e.g. `http://localhost:32400` or `http://192.168.1.100:32400/web`).
 3. Click **Request Permission & Add** and approve Chrome's origin prompt.
 
----
-
 ## Privacy
 
 Playkeys does not collect, track, or transmit any user data, credentials, listening history, or analytics. All operations occur locally in the browser. See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) for details.
-
----
 
 ## Development
 
 Developer guidelines and internal documentation are maintained in [`bowuu/agent-rules`](https://github.com/bowuu/agent-rules) (`repos/playkeys/AGENTS.md`).
 
----
-
 ## Disclaimer
 
 Plex is a registered trademark of Plex, Inc. Playkeys is an independent open-source project and is not affiliated with or endorsed by Plex, Inc.
-
----
 
 ## License
 
